@@ -1,233 +1,131 @@
-# Game Platform — Architecture Decisions
+# Game Platform — Architecture overview and ADR index
 
 **Status:** Accepted baseline  
-**Version:** 1.0  
+**Version:** 2.0 (replaces 1.0)  
 **Date:** 2026-11-23  
-**Scope:** MVP for WeChat Mini Games, with multi-platform extension points.
+**Scope:** V1 for WeChat Mini Games, with multi-platform extension points.
+
+The decisions themselves now live in one file per ADR under [`docs/adr/`](../adr/). This document keeps the cross-cutting overview and the index. The full design narrative is in the [technical design](../game-platform-technical-design.md).
 
 ## 1. Context and goals
 
-Build a reusable backend and operations platform for multiple small games. The first release supports WeChat Mini Games. Every game has its own player account namespace. The server is authoritative for durable/high-value state; moment-to-moment combat simulation may run on the client. The platform includes player APIs, GM APIs, configuration, economy, ads, operations, and audit.
+Build a reusable backend and operations platform for multiple small games. The first release supports WeChat Mini Games. Every game has its own player account namespace. The server is authoritative for key data; moment-to-moment combat runs on the client. V1 delivers the player API, the GM API, a complete GM platform (administrators, RBAC, player and economy management, config centre, mail, activities, audit, basic operations data) and a background worker.
 
-Non-goals for MVP: real-time authoritative combat servers, cross-game shared player accounts, microservice-per-domain deployment, mandatory message broker, and Kubernetes-first deployment.
+Non-goals for V1: payments, real-time combat servers, cross-game shared player accounts, microservice-per-domain deployment, a message broker (Kafka / RocketMQ), and Kubernetes.
 
-## 2. Logical architecture
+## 2. What changed from baseline 1.0
+
+| Topic | 1.0 | 2.0 |
+|---|---|---|
+| Worker | Future, optional; would call a private internal API over HTTPS | `game-worker` is a V1 component that calls `gamecore` in-process |
+| Internal API | Private route group / listener, three reserved endpoints | Reserved `internal-api` entry with a nine-endpoint contract; not deployed in V1; HMAC AK/SK or mTLS |
+| GM platform | Core workflows first, console in a later phase | Complete GM platform from V1 |
+| ADR layout | Eight ADRs in this file | Nine ADR files under `docs/adr/` |
+| Player contract file | `api/openapi/player-api.yaml` | `api/openapi/game-api.yaml` |
+| Schema | 37 tables | 57 tables, renamed to the `schema.table` names of the design document. The 20 new tables: game environments, login records, player bans, config release items, run events, currency definitions, daily ad limits, announcements, mail attachments, reward jobs, leaderboard snapshots, admin sessions, admin MFA, service audit logs, daily player and game stats, background jobs, service identities, credentials and game grants |
+| Third-party callbacks | Not addressed | Separate `/platform-callbacks/v1` surface with per-platform verification |
+
+## 3. Logical architecture
 
 ```mermaid
 flowchart LR
-  Client[WeChat Mini Game / Cocos Client] -->|HTTPS| GameAPI[game-api / Go + Gin]
+  Client[Game Client / Cocos Creator] -->|HTTPS| GameAPI[game-api / Go + Gin]
   GMWeb[GM Web / Vue 3] -->|HTTPS + MFA| GMAPI[gm-api / Go + Gin]
   GameAPI --> Core[Shared gamecore packages]
   GMAPI --> Core
+  Worker[game-worker] --> Core
   Core --> PG[(PostgreSQL)]
   Core --> Redis[(Redis)]
-  Core --> Object[(S3 / OSS)]
-  GameAPI --> WX[WeChat Platform Adapter]
-  Worker[Optional background worker] -. private HTTPS .-> Internal[Private internal API surface]
-  Internal -. shared application services .-> Core
+  Core --> Object[(S3 / OSS + CDN)]
+  GameAPI --> WX[WeChat platform adapter]
+  Services[Trusted services] -. reserved .-> Internal[internal-api]
+  Internal -. reserved .-> Core
 ```
 
-The diagram is logical. The internal API is a private contract for future independently deployed workers/integrations; it is not a third public API service in MVP.
+Solid lines are V1. Dotted lines are reserved: `internal-api` has a contract and a service-auth abstraction but is not deployed.
 
-## ADR-001 — Two independently deployed API processes, shared modular core
+## 4. ADR index
 
-**Status:** Accepted
-
-**Decision**
-- Deploy `game-api` and `gm-api` as separate Go + Gin applications.
-- Keep domain and application services in shared `gamecore` packages in one Go module.
-- Each process owns its HTTP router, handlers, DTOs, middleware, configuration, health checks, image, and deployment lifecycle.
-- Both call application services directly in-process. Do not make game-api call gm-api or vice versa.
-- Start as a modular monolith, not a network of domain microservices.
-
-**Rationale**
-Separate deployment prevents GM traffic, attack surface, and release cadence from being coupled to the player ingress. A shared core avoids duplicated business rules and distributed transactions.
-
-**Consequences**
-- A domain change may require rebuilding both binaries.
-- Shared code must not contain transport-specific assumptions.
-- Use explicit caller/authorization context in every application-service call.
-- Split a domain into a separate service only after independent scaling, ownership, or isolation requirements justify the operational cost.
-
-## ADR-002 — Platform internal API is a private boundary, not a third MVP service
-
-**Status:** Accepted
-
-**Decision**
-- Define a separate OpenAPI document for internal service-to-service operations.
-- In MVP, do not deploy a standalone `platform-internal-api` service and do not expose internal routes through the public ingress.
-- If a background worker or external trusted platform component must cross a process boundary, expose a private listener/route group with network policy and workload authentication (mTLS preferred; short-lived service JWT acceptable where mTLS is unavailable).
-- Internal endpoints call the same application services and enforce service identity, game scope, operation scope, request expiry, and idempotency.
-- Internal API is not a bypass around player or GM authorization. It cannot accept caller-supplied `game_id` without validating the service's grant.
-
-**MVP internal contract**
-- `GET /internal/v1/health/ready`: readiness for orchestrators on a private listener.
-- `POST /internal/v1/jobs/{jobId}/execute`: reserved for a future worker executor; disabled until a worker runtime is deployed.
-- `POST /internal/v1/events/ingest`: reserved for trusted internal event producers; disabled until producer identity and quotas are provisioned.
-
-Do not create internal endpoints merely to wrap a function already callable through gamecore. Do not expose internal OpenAPI to clients or public API gateways.
-
-**Authentication and authorization**
-- Prefer mTLS workload identity at the ingress/service mesh boundary.
-- If JWT is used, validate issuer, audience, expiry, not-before, key rotation, service subject, and explicit scopes.
-- Require `X-Request-ID`; mutations require `Idempotency-Key`.
-- Internal service credentials are separate from player and GM signing keys.
-- Private networking is defense in depth, not authentication.
-
-## ADR-003 — Game-scoped player identity and platform adapters
-
-**Status:** Accepted
-
-**Decision**
-- A player is scoped by `game_id`; each game has independent player accounts.
-- External identity uniqueness is `(game_id, platform, app_id, openid)`.
-- WeChat `unionid` may be stored as an attribute for diagnostics/linking, but must not silently merge players across games.
-- Resolve the game from trusted application configuration/client credential mapping, not an arbitrary client-provided game_id.
-- Keep provider-specific login in an adapter interface (for example `IdentityProvider.ExchangeCode`); persist normalized identity records in the shared core.
-
-**WeChat login flow**
-1. Client calls `wx.login()` and sends the temporary code to game-api.
-2. Server selects the configured WeChat app for the resolved game and exchanges code with `jscode2session`.
-3. Server maps/creates the game-scoped player and issues platform-owned access/refresh tokens.
-4. Never return app secret or WeChat session_key to the client. Store secrets in a secret manager.
-
-**Consequences**
-Adding another mini-game platform requires an adapter and app configuration, not a new player model.
-
-## ADR-004 — Server authority for durable state; client-run combat is untrusted
-
-**Status:** Accepted
-
-**Decision**
-- Server owns wallets, paid/premium currency, inventory, permanent unlocks, mail/activity claims, settlement eligibility, and durable progression.
-- Client may simulate moment-to-moment combat and submit a run result summary.
-- The server validates run ownership, run state, expiry, one-time settlement, configuration version, reward bounds, costs, and idempotency.
-- Client-submitted score, win flag, elapsed time, and reward are untrusted inputs. Never accept a client-calculated reward or balance.
-- For valuable rewards, use server-verifiable challenges, replay/simulation, signed checkpoints, or conservative reward caps. If the client owns all simulation, anti-cheat cannot be made cryptographically complete.
-
-**Economy invariants**
-- Store currency as integer minor units.
-- Every balance mutation and immutable ledger entry commit in one database transaction.
-- Unique source/idempotency constraints prevent duplicate grants.
-- Never allow GM or player handlers to directly set wallet balances; use a ledger-backed application service.
-
-## ADR-005 — PostgreSQL is authoritative; Redis and object storage are non-authoritative
-
-**Status:** Accepted
-
-**Decision**
-- PostgreSQL stores durable identity, player, config metadata, gameplay settlement, economy ledger, operations, RBAC, and audit data.
-- Redis is used for cache, rate limiting, short-lived sessions/coordination, and derived leaderboard acceleration. Redis loss must not corrupt durable ownership or balances.
-- S3/OSS + CDN stores large versioned configuration payloads and static assets. PostgreSQL stores metadata, checksums, release state, and object keys.
-- Use one PostgreSQL database initially, with schemas by domain. Every game-owned business row carries `game_id`.
-- Enforce cross-game references with composite keys/FKs wherever applicable.
-
-## ADR-006 — Separate player and GM security planes
-
-**Status:** Accepted
-
-**Decision**
-- Player tokens and GM sessions use separate issuers/audiences/signing keys and independent revocation/session stores.
-- GM authentication supports MFA; privileged actions require RBAC permission codes and explicit game scope.
-- GM API uses deny-by-default authorization. Roles are permission bundles; authorization is evaluated as (admin, permission, game scope).
-- GM mutations append an audit record with actor, game, action, target, reason/ticket, request_id, before/after or redacted diff, and timestamp.
-- High-risk actions (manual grants, account recovery, bulk sends, config release) may require dual approval according to policy.
-- Player API must not expose GM endpoints; GM API must not accept player credentials.
-
-**Database roles**
-- Separate runtime roles for game-api, gm-api, and future worker; no superuser/BYPASSRLS.
-- Migration role is separate and used only by deployment jobs.
-- Runtime roles receive only required schema/table/function privileges.
-- RLS may provide defense in depth, but application authorization and explicit tenant/game scope remain mandatory. Never rely on RLS alone where a privileged role can bypass it.
-
-## ADR-007 — API contract and compatibility
-
-**Status:** Accepted
-
-**Decision**
-- Use OpenAPI 3.1 as the contract source.
-- Maintain three documents: player, GM, and private internal API. Common schemas may be factored into a later shared component package, but security scopes remain distinct.
-- Version public routes under `/api/v1` and GM routes under `/gm/v1`; internal routes under `/internal/v1`.
-- Mutating requests support `Idempotency-Key`; save updates use `If-Match`/ETag.
-- Use cursor pagination for unbounded collections.
-- Every response includes a request identifier; errors use a stable machine-readable code.
-- Do not silently break clients: additive optional fields are preferred; breaking changes require a new API version.
-
-## ADR-008 — Deployment and asynchronous work
-
-**Status:** Accepted
-
-**Decision**
-- Build and deploy game-api and gm-api independently. GM Web is a separate static frontend.
-- Begin with Docker Compose or a simple managed container platform; Kubernetes is not an MVP prerequisite.
-- Use PostgreSQL transactional outbox for durable asynchronous work. A lightweight worker polls/claims jobs initially; add a broker only when throughput/latency or fan-out justifies it.
-- No Kafka/RocketMQ/NATS in the initial baseline.
-- Both APIs are stateless; horizontal scaling is allowed after session/cache semantics are externalized.
-
-## 3. Service responsibilities
-
-| Component | Responsibility | Publicly reachable |
+| ADR | Decision | Replaces (1.0) |
 |---|---|---|
-| game-api | WeChat login, player profile/save, config, runs, economy, ads, mail/activity, leaderboard | Yes |
-| gm-api | GM auth, RBAC, player operations, config publishing, economy adjustments, operations, analytics, audit | Restricted |
-| gm-web | Operator UI | Restricted |
-| gamecore | Domain/application services, repositories, provider ports | No |
-| internal API surface | Authenticated workload-to-workload operations | No |
-| worker (future) | Outbox/jobs, aggregation, scheduled work | No |
-| PostgreSQL | Durable source of truth | No |
-| Redis | Cache/ephemeral state | No |
-| S3/OSS | Config blobs/assets | CDN read only as appropriate |
+| [ADR-0001](../adr/ADR-0001-modular-monolith.md) | Modular monolith: one Go module, shared `gamecore`, independently deployed entrypoints | ADR-001 |
+| [ADR-0002](../adr/ADR-0002-game-isolation.md) | `game_id` is the isolation key, enforced by composite keys, explicit repository scope and separate database roles | Parts of ADR-003, ADR-005 |
+| [ADR-0003](../adr/ADR-0003-player-account-model.md) | Per-game player accounts; WeChat login; platform tokens; platform adapter | ADR-003 |
+| [ADR-0004](../adr/ADR-0004-data-authority-model.md) | Server authority for key data; client-run combat with server settlement; PostgreSQL authoritative | ADR-004, part of ADR-005 |
+| [ADR-0005](../adr/ADR-0005-api-service-boundaries.md) | Four entries and three security planes; `Actor` context; OpenAPI contracts; callbacks as a separate surface | ADR-006, ADR-007 |
+| [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md) | One database, schemas by domain, constraint and role conventions, migrations | ADR-005, part of ADR-006 |
+| [ADR-0007](../adr/ADR-0007-economy-transaction-model.md) | Balance plus immutable ledger, idempotent single write path, GM adjustments | Part of ADR-004 |
+| [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md) | Worker calls `gamecore` directly; internal API reserved | ADR-002 |
+| [ADR-0009](../adr/ADR-0009-async-job-model.md) | PostgreSQL-backed jobs and outbox; no broker | Part of ADR-008 |
 
-## 4. Repository layout
+Changing a decision means amending its ADR and having it reviewed before implementation. Implementation work must not silently rewrite an accepted ADR.
+
+## 5. Component responsibilities
+
+| Component | Responsibility | Reachable from | V1 |
+|---|---|---|---|
+| `game-api` | WeChat login, profile, save, config, runs and settlement, economy, ads, mail, activities, leaderboards, event upload | Public | Deployed |
+| `gm-api` | GM auth and MFA, RBAC, games, players, economy adjustments, config publishing, mail, activities, announcements, leaderboards, analytics, audit | Restricted | Deployed |
+| `gm-web` | Operator console (Vue 3 + TypeScript + Element Plus) | Restricted | Deployed |
+| `game-worker` | Outbox and background jobs: batch mail and rewards, statistics, rebuilds, cleanup, snapshots | No inbound traffic | Deployed |
+| `internal-api` | Authenticated service-to-service operations | Private network only | Reserved |
+| `gamecore` | Domain model, application services, repositories | In-process only | — |
+| PostgreSQL | Authoritative store | Private | — |
+| Redis | Cache, rate limiting, leaderboard read acceleration | Private | — |
+| S3/OSS + CDN | Config payloads, assets, save backups | CDN read where appropriate | — |
+
+## 6. Repository layout
 
 ```text
 game-platform/
 ├── apps/
-│   ├── game-client/                 # Cocos Creator / TypeScript
-│   └── gm-web/                      # Vue 3 / TypeScript / Element Plus
+│   ├── game-client/cocos/           # Cocos Creator + TypeScript
+│   └── gm-web/                      # Vue 3 + TypeScript + Element Plus
 ├── services/
-│   ├── game-api/
-│   │   ├── cmd/server/main.go
-│   │   └── internal/transport/http/
-│   ├── gm-api/
-│   │   ├── cmd/server/main.go
-│   │   └── internal/transport/http/
-│   └── worker/                      # future, only when needed
+│   ├── game-api/cmd/server/main.go
+│   ├── gm-api/cmd/server/main.go
+│   ├── internal-api/cmd/server/main.go   # reserved; not deployed in V1
+│   └── game-worker/cmd/worker/main.go
 ├── internal/
-│   └── gamecore/
-│       ├── domain/
-│       ├── application/
-│       ├── ports/
-│       ├── adapters/
-│       └── persistence/postgres/
+│   ├── gamecore/{domain,application,repository}/
+│   ├── transport/http/{game,gm,internal}/
+│   ├── security/{playerauth,adminauth,serviceauth}/
+│   ├── platform/wechat/
+│   ├── infrastructure/{postgres,redis,storage,observability}/
+│   └── shared/
 ├── migrations/
-├── api/
-│   └── openapi/
+├── api/{openapi,generated}/
+├── deploy/{docker,compose,nginx,monitoring}/
 ├── docs/
-└── deploy/
+├── AGENTS.md
+└── go.mod                           # one Go module at the repository root
 ```
 
-Use one Go module at repository root initially. This allows both services to import root-level `internal/gamecore` under Go's internal visibility rules. Keep transport DTOs out of gamecore.
+`gamecore` does not import Gin or any transport DTO. Entry packages under `internal/transport/http/*` do not import each other.
 
-## 5. Required security and reliability controls
+## 7. Required security and reliability controls
 
-- Resolve game/app identity server-side; reject unknown or disabled app mappings.
-- Hash refresh tokens at rest; rotate on use and detect reuse.
-- Rate-limit login, refresh, save, settlement, ad claim, and GM authentication.
-- Enforce request body limits, timeouts, TLS, structured logs, trace/request IDs, and secret redaction.
-- Use database constraints as the final defense for uniqueness, balance non-negativity, and idempotency.
-- Apply bounded retries only to retry-safe operations.
-- Never put access tokens, WeChat codes, session keys, app secrets, or raw personal identifiers in logs.
-- Back up PostgreSQL and object storage metadata; regularly test restore and point-in-time recovery.
-- GM API should be behind VPN/Zero Trust or IP allowlist where operationally feasible, plus MFA and WAF/rate limits.
+- Resolve game identity server-side; reject unknown or disabled platform apps. Never let a client switch games by sending a `game_id`.
+- Hash refresh tokens at rest; rotate on use; support revocation.
+- Rate-limit login, refresh, save, settlement, ad claim and GM authentication.
+- Make every important write idempotent: identity creation at login, settlement, grants and spends, mail and activity claims, ad claims, GM adjustments, batch reward jobs. The final guarantee is a PostgreSQL unique key and transaction, not a Redis lock.
+- Append an audit record for every GM mutation with operator, game, action, target, before/after data, reason and request ID; redact passwords, tokens and secrets.
+- Structured JSON logs with `request_id`, `game_id`, `player_id`, route, status and latency. Never log AppSecret, refresh tokens, full `Authorization` headers or WeChat `session_key`.
+- Back up PostgreSQL and test restore; keep a backup and recovery runbook.
+- Place `gm-api` behind VPN, Zero Trust or an IP allowlist where feasible, in addition to MFA and rate limits.
 
-## 6. Open questions to resolve before production
+## 8. Open questions to resolve before production
 
 1. WeChat app credential rotation and ownership process.
-2. Whether any game needs paid currency and corresponding refund/chargeback workflows.
-3. Exact retention/legal policy for player identifiers, event data, and audit logs.
-4. Whether high-value combat rewards require server replay or signed challenge protocol.
-5. Whether GM high-risk operations require dual approval from day one.
-6. Target regions, RPO/RTO, data residency, and expected concurrency.
+2. Which process hosts `/platform-callbacks/v1`, and whether any callback is built in V1 at all. Scenarios and options are in [service-boundaries.md](service-boundaries.md#5-third-party-callbacks); ADR-0005 assumes a route group in `game-api`.
+3. Whether to adopt WeChat's optional server-side verification for rewarded ads in V1. WeChat documents the mode (<https://developers.weixin.qq.com/minigame/dev/guide/security/antiadcheat.html>); its request fields and signature scheme have not been reviewed here. Adopting it needs a callback endpoint and a column on `ads.ad_sessions`.
+4. Whether high-value combat rewards need server replay verification in the first game.
+5. The amount threshold at which GM adjustments require dual approval, and when that enhancement ships.
+6. Retention policy for player identifiers, event data, ledgers and audit logs.
+7. Target regions, RPO/RTO, data residency and expected concurrency.
+8. GM refresh-token lifetime (left to security policy in ADR-0003).
+9. The role-to-permission mapping in [rbac-matrix.md](../security/rbac-matrix.md) and the grant matrix in [database-roles-and-grants.md](../database/database-roles-and-grants.md) are proposals awaiting confirmation.
+10. Items marked **(proposal)** in the topic documents: session denylist, refresh-token reuse detection, wallet write path (repository discipline or `SECURITY DEFINER` function), first RLS tables, backoff and lease values.
+11. Endpoints the GM menu implies but the API table does not list: GM logout and MFA enrollment, item adjustments, batch rewards other than mail, list/edit/publish for activities and announcements, leaderboard creation and rebuild, job progress and manual retry. On the player side: marking mail as read.
 
-These are explicit implementation gates; do not invent defaults in production configuration.
+These are implementation gates; do not invent production defaults for them.

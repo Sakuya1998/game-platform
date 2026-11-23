@@ -1,88 +1,527 @@
 openapi: 3.1.0
 info:
   title: Game Platform Internal API
-  version: 1.0.0
-  description: Private workload-to-workload contract. Reserved for independently deployed workers and trusted internal producers; disabled in the MVP until provisioned.
+  version: 2.0.0
+  description: |
+    Service-to-service contract for `internal-api`. Design baseline v2.0 (2026-11-23); see
+    docs/game-platform-technical-design.md section 6.3 and docs/adr/ADR-0008-internal-api-and-worker.md.
+
+    **Status: reserved. `internal-api` is not deployed in V1.** In V1 `game-worker` calls
+    `gamecore` in-process and does not use this API. The contract exists so that independent
+    workers or other trusted systems can be given HTTP access later without changing `gamecore`.
+
+    Rules that apply to every operation once the service is deployed:
+
+    - Reachable from the private network only; never routed through the public ingress.
+    - The caller is a service identity, authenticated by HMAC AK/SK signature or mTLS. Player and
+      administrator tokens are never accepted.
+    - Signed requests carry a timestamp and a nonce; stale or replayed requests are rejected.
+    - Authorization is per service identity and per game: a `game_id` in a request is accepted
+      only if the service holds a matching grant (`x-required-permission`).
+    - Mutations require `Idempotency-Key`. Every call is written to the service audit log.
+    - This API is not a second GM API: it exposes no operator workflows.
+    - Third-party platform callbacks (WeChat, ad platforms) are not part of this API. They live
+      under `/platform-callbacks/v1` with each platform's own verification.
+    - Responses use the envelope `{ code, message, data, request_id }`.
 servers:
-  - url: https://internal.example.net
+  - url: https://internal.example.com
+    description: Private network only
 security:
-  - WorkloadBearer: []
+  - ServiceHmac: []
+  - ServiceMtls: []
+tags:
+  - name: Jobs
+  - name: Mail
+  - name: Rewards
+  - name: Analytics
+  - name: Config
+  - name: Maintenance
 paths:
-  /internal/v1/health/ready:
-    get:
-      security: []
-      operationId: readiness
-      summary: Private readiness probe
-      responses:
-        '200': { description: Ready }
-        '503': { description: Not ready }
-  /internal/v1/jobs/{jobId}/execute:
+  /internal/v1/jobs/{job_id}/claim:
     post:
-      operationId: executeJob
-      summary: Execute a claimed background job
-      description: Reserved. Requires worker identity, job ownership/lease validation, allowlisted job type, and idempotency. Not enabled until a worker service is deployed.
+      tags: [Jobs]
+      operationId: claimJob
+      summary: Claim a pending job and take a lease on it
+      x-required-permission: job.execute
       parameters:
-        - name: jobId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema: { type: string }
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [leaseToken]
+              required: [worker_id]
               properties:
-                leaseToken: { type: string }
-                input: { type: object }
+                worker_id: { type: string }
+                lease_seconds: { type: integer, minimum: 10, maximum: 3600, default: 60 }
       responses:
-        '202': { description: Accepted for execution }
-        '401': { description: Invalid workload identity }
-        '403': { description: Worker is not authorized for this job type or game scope }
-        '409': { description: Lease expired, job already completed, or idempotency conflict }
-  /internal/v1/events/ingest:
+        '200':
+          description: Job claimed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JobLease' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/v1/jobs/{job_id}/heartbeat:
     post:
-      operationId: ingestTrustedEvents
-      summary: Ingest events from trusted internal producers
-      description: Reserved. Producers require explicit event-type allowlists, game scope, payload limits, and deduplication.
+      tags: [Jobs]
+      operationId: heartbeatJob
+      summary: Extend the lease of a running job
+      x-required-permission: job.execute
       parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema: { type: string }
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [gameId, events]
+              required: [lease_token]
               properties:
-                gameId: { type: string, format: uuid }
+                lease_token: { type: string }
+                lease_seconds: { type: integer, minimum: 10, maximum: 3600, default: 60 }
+                progress: { type: object, description: Optional progress counters. }
+      responses:
+        '200':
+          description: Lease extended
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JobLease' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/v1/jobs/{job_id}/complete:
+    post:
+      tags: [Jobs]
+      operationId: completeJob
+      summary: Mark a job as succeeded
+      x-required-permission: job.execute
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lease_token]
+              properties:
+                lease_token: { type: string }
+                result: { type: object }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/v1/jobs/{job_id}/fail:
+    post:
+      tags: [Jobs]
+      operationId: failJob
+      summary: Report a job failure
+      description: The server decides between `retrying` (with backoff) and `failed` from the job's retry budget.
+      x-required-permission: job.execute
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lease_token, error]
+              properties:
+                lease_token: { type: string }
+                error: { type: string, maxLength: 2000 }
+                retryable: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Failure recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, enum: [retrying, failed] }
+                          next_run_at: { type: [string, 'null'], format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/v1/mail-deliveries/execute:
+    post:
+      tags: [Mail]
+      operationId: executeMailDelivery
+      summary: Deliver one batch of a mail to players
+      description: Delivery is idempotent per `(mail_id, player_id)`.
+      x-required-permission: mail.deliver
+      parameters:
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [game_id, mail_id, player_ids]
+              properties:
+                game_id: { type: string, format: uuid }
+                mail_id: { type: string, format: uuid }
+                reward_job_id: { type: string, format: uuid }
+                player_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Batch processed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BatchResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/v1/reward-jobs/execute:
+    post:
+      tags: [Rewards]
+      operationId: executeRewardJob
+      summary: Grant one batch of a reward job
+      description: |
+        Rewards are defined by the reward job, not by the caller. Each grant goes through the
+        economy service and is idempotent per player through the ledger unique key.
+      x-required-permission: reward.execute
+      parameters:
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [game_id, reward_job_id, player_ids]
+              properties:
+                game_id: { type: string, format: uuid }
+                reward_job_id: { type: string, format: uuid }
+                player_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Batch processed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BatchResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/v1/events/batch:
+    post:
+      tags: [Analytics]
+      operationId: ingestEvents
+      summary: Write a batch of events from a trusted internal producer
+      x-required-permission: event.write
+      parameters:
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [game_id, events]
+              properties:
+                game_id: { type: string, format: uuid }
                 events:
                   type: array
+                  minItems: 1
                   maxItems: 500
                   items:
                     type: object
-                    required: [eventId, eventType, occurredAt, payload]
+                    required: [event_id, event_type, occurred_at]
                     properties:
-                      eventId: { type: string }
-                      eventType: { type: string }
-                      occurredAt: { type: string, format: date-time }
+                      event_id: { type: string, maxLength: 64 }
+                      event_type: { type: string, maxLength: 64 }
+                      player_id: { type: [string, 'null'], format: uuid }
+                      occurred_at: { type: string, format: date-time }
                       payload: { type: object }
       responses:
-        '202': { description: Events accepted }
-        '400': { description: Invalid or disallowed event payload }
-        '403': { description: Producer lacks game or event-type scope }
+        '202':
+          description: Events accepted; duplicates by `event_id` are ignored
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          accepted: { type: integer }
+                          duplicates: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/v1/config-releases/notify:
+    post:
+      tags: [Config]
+      operationId: notifyConfigRelease
+      summary: Notify that a config release was published so caches and CDN can be refreshed
+      x-required-permission: config.notify
+      parameters:
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [game_id, release_id]
+              properties:
+                game_id: { type: string, format: uuid }
+                release_id: { type: string, format: uuid }
+      responses:
+        '202': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/v1/maintenance/tasks:
+    post:
+      tags: [Maintenance]
+      operationId: createMaintenanceTask
+      summary: Enqueue a controlled maintenance task
+      description: Only allowlisted task types are accepted. The task runs as a background job.
+      x-required-permission: maintenance.run
+      parameters:
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_type]
+              properties:
+                task_type:
+                  type: string
+                  enum:
+                    - leaderboard_rebuild
+                    - expired_data_cleanup
+                    - save_snapshot
+                    - config_cache_refresh
+                    - stats_aggregation
+                game_id:
+                  type: [string, 'null']
+                  format: uuid
+                  description: Required for game-scoped task types.
+                params: { type: object }
+      responses:
+        '202':
+          description: Task enqueued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [job_id]
+                        properties:
+                          job_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 components:
   securitySchemes:
-    WorkloadBearer:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Short-lived service token with aud=game-platform-internal, service subject, and explicit scopes. Prefer mTLS workload identity where available.
+    ServiceHmac:
+      type: apiKey
+      in: header
+      name: X-Access-Key
+      description: |
+        Access key ID of a service credential. The request is signed with the matching secret
+        (HMAC-SHA256) over method, path, query, timestamp, nonce and body hash, and the signature
+        is sent in `X-Signature`. The canonical string format is fixed when the service is first
+        deployed.
+    ServiceMtls:
+      type: mutualTLS
+      description: Client certificate whose fingerprint is registered for a service identity.
+  parameters:
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Timestamp:
+      name: X-Timestamp
+      in: header
+      description: Request time, RFC 3339 UTC. Required with HMAC; requests outside the allowed clock skew are rejected.
+      schema: { type: string, format: date-time }
+    Nonce:
+      name: X-Nonce
+      in: header
+      description: Unique per request. Required with HMAC; a repeated nonce inside the skew window is rejected.
+      schema: { type: string, minLength: 16, maxLength: 64 }
+    Signature:
+      name: X-Signature
+      in: header
+      description: HMAC-SHA256 signature, hex encoded. Required with HMAC.
+      schema: { type: string }
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: true
+      schema: { type: string, maxLength: 64 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Unknown credential, bad signature, stale timestamp or replayed nonce (`AUTH_UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The service identity lacks the permission or the game grant (`AUTH_FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`RESOURCE_NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Lease lost, job already finished, or idempotency conflict (`IDEMPOTENCY_CONFLICT`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, examples: [OK] }
+        message: { type: string, examples: [success] }
+        data: {}
+        request_id: { type: string }
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, description: Stable machine-readable code. }
+        message: { type: string }
+        data: {}
+        request_id: { type: string }
+    JobLease:
+      type: object
+      required: [job_id, job_type, lease_token, lease_expires_at]
+      properties:
+        job_id: { type: string, format: uuid }
+        job_type: { type: string }
+        game_id: { type: [string, 'null'], format: uuid }
+        payload: { type: object }
+        retry_count: { type: integer }
+        lease_token: { type: string }
+        lease_expires_at: { type: string, format: date-time }
+    BatchResult:
+      type: object
+      required: [processed, skipped, failed]
+      properties:
+        processed: { type: integer }
+        skipped: { type: integer, description: Already delivered or granted earlier. }
+        failed: { type: integer }
+        failures:
+          type: array
+          items:
+            type: object
+            properties:
+              player_id: { type: string, format: uuid }
+              code: { type: string }

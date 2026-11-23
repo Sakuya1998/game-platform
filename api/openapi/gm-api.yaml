@@ -1,8 +1,24 @@
 openapi: 3.1.0
 info:
   title: Game Platform GM API
-  version: 1.0.0
-  description: Restricted operator API. Uses a separate identity plane, MFA, RBAC, game scope, and immutable audit.
+  version: 2.0.0
+  description: |
+    Operator API served by `gm-api`. Design baseline v2.0 (2026-11-23); see
+    docs/game-platform-technical-design.md sections 6.2 and 7.
+
+    Rules that apply to every operation:
+
+    - The GM plane is separate from the player plane: its own login, MFA, tokens, signing keys
+      and sessions. Player credentials are never accepted.
+    - Authorization is deny-by-default and evaluated as administrator + permission code + game
+      scope. `x-required-permission` names the permission code of each operation. A `game_id` in
+      the path is accepted only after the administrator's scope for that game is confirmed.
+    - Every mutation appends an audit record (operator, game, action, target, before/after,
+      reason, request ID).
+    - Mutations require `Idempotency-Key`. High-risk operations also require `reason`.
+    - Batch operations (mass mail, batch rewards) create a background job and return its
+      reference; they are never executed inside the request.
+    - Responses use the envelope `{ code, message, data, request_id }`.
 servers:
   - url: https://gm-api.example.com
 security:
@@ -13,105 +29,263 @@ tags:
   - name: Players
   - name: Economy
   - name: Config
-  - name: Operations
+  - name: Mail
+  - name: Activity
+  - name: Announcement
+  - name: Ranking
   - name: Admin
+  - name: RBAC
   - name: Audit
+  - name: Analytics
 paths:
   /gm/v1/auth/login:
     post:
       tags: [Auth]
-      security: []
       operationId: adminLogin
+      summary: Administrator login (first factor)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email, password]
+              required: [username, password]
               properties:
-                email: { type: string, format: email }
+                username: { type: string }
                 password: { type: string, format: password }
       responses:
         '200':
-          description: MFA challenge or authenticated session
+          description: MFA challenge. Tokens are issued by `/auth/mfa/verify`.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  mfaRequired: { type: boolean }
-                  challengeToken: { type: string }
-                  accessToken: { type: string }
-                  expiresIn: { type: integer }
-        '401': { description: Invalid credentials }
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [mfa_required, challenge_token]
+                        properties:
+                          mfa_required: { type: boolean }
+                          challenge_token: { type: string, description: 'Short-lived and single-use.' }
+                          mfa_enrollment_required:
+                            type: boolean
+                            description: True when the administrator has not enrolled MFA yet.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /gm/v1/auth/mfa/verify:
     post:
       tags: [Auth]
-      security: []
       operationId: verifyMfa
+      summary: Verify the MFA code and issue an administrator session
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [challengeToken, code]
+              required: [challenge_token, code]
               properties:
-                challengeToken: { type: string }
-                code: { type: string }
+                challenge_token: { type: string }
+                code: { type: string, description: TOTP code or recovery code. }
       responses:
-        '200': { description: MFA verified; admin session issued }
-        '401': { description: Invalid or expired challenge }
+        '200':
+          description: Session issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminTokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: adminRefresh
+      summary: Rotate the administrator refresh token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Rotated tokens
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminTokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /gm/v1/games:
     get:
       tags: [Games]
       operationId: listGames
+      summary: List the games the administrator is scoped to
+      x-required-permission: game.read
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Games visible to the administrator
+          description: Games
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/Game' }
-  /gm/v1/games/{gameId}/players:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Game' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Games]
+      operationId: createGame
+      summary: Create a game
+      description: Requires platform scope.
+      x-required-permission: game.manage
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, pattern: '^[a-z][a-z0-9_-]{1,62}$' }
+                name: { type: string }
+                platform_apps:
+                  type: array
+                  items:
+                    type: object
+                    required: [platform, app_id, credential_ref]
+                    properties:
+                      platform: { type: string, examples: [wechat_minigame] }
+                      app_id: { type: string }
+                      credential_ref:
+                        type: string
+                        description: Secret-manager reference. The AppSecret itself is never sent to this API.
+      responses:
+        '201':
+          description: Game created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Game' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/players:
     get:
       tags: [Players]
       operationId: searchPlayers
+      summary: Search players of a game
+      x-required-permission: player.read
       parameters:
         - $ref: '#/components/parameters/GameId'
-        - name: keyword
+        - $ref: '#/components/parameters/RequestId'
+        - name: player_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: nickname
           in: query
           schema: { type: string }
+        - name: openid
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, banned, deleted] }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Player search page
+          description: Player page
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PlayerPage' }
-        '403': { description: Missing player.read permission or game scope }
-  /gm/v1/games/{gameId}/players/{playerId}:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Player' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/games/{game_id}/players/{player_id}:
     get:
       tags: [Players]
       operationId: getPlayer
+      summary: Get player detail
+      x-required-permission: player.read
       parameters:
         - $ref: '#/components/parameters/GameId'
         - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Player detail
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Player' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PlayerDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /gm/v1/games/{game_id}/players/{player_id}/ban:
     post:
       tags: [Players]
-      operationId: changePlayerStatus
+      operationId: banPlayer
+      summary: Ban a player
+      x-required-permission: player.ban
       parameters:
         - $ref: '#/components/parameters/GameId'
         - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -119,22 +293,148 @@ paths:
           application/json:
             schema:
               type: object
-              required: [status, reason]
+              required: [reason]
               properties:
-                status: { type: string, enum: [active, banned] }
                 reason: { type: string, minLength: 3 }
-                ticketRef: { type: string }
+                ticket_id: { type: string }
+                expires_at:
+                  type: [string, 'null']
+                  format: date-time
+                  description: Null or absent means the ban lasts until it is lifted.
       responses:
-        '200': { description: Status changed and audited }
-        '403': { description: Forbidden }
-  /gm/v1/games/{gameId}/players/{playerId}/wallet-adjustments:
+        '200':
+          description: Player banned; active sessions revoked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PlayerBan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/players/{player_id}/unban:
+    post:
+      tags: [Players]
+      operationId: unbanPlayer
+      summary: Lift a player's active ban
+      x-required-permission: player.unban
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 3 }
+                ticket_id: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/players/{player_id}/save/restore:
+    post:
+      tags: [Players]
+      operationId: restorePlayerSave
+      summary: Restore a player's save from a snapshot
+      description: |
+        The current save is snapshotted first (`before_restore`), then replaced by the chosen
+        snapshot with a new `save_version`. Wallets and items are not affected.
+      x-required-permission: player.save.restore
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [snapshot_id, reason]
+              properties:
+                snapshot_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 3 }
+                ticket_id: { type: string }
+      responses:
+        '200':
+          description: Save restored
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [save_version]
+                        properties:
+                          save_version: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/players/{player_id}/wallets:
+    get:
+      tags: [Economy]
+      operationId: getPlayerWallets
+      summary: Get a player's balances
+      x-required-permission: economy.read
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Wallets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Wallet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /gm/v1/games/{game_id}/players/{player_id}/wallet-adjustments:
     post:
       tags: [Economy]
       operationId: adjustWallet
-      description: Ledger-backed adjustment only; direct balance replacement is forbidden.
+      summary: Manually credit or debit a player's wallet
+      description: |
+        Ledger-backed adjustment. The request carries a change amount, never a target balance.
+        A positive `amount` credits and requires `economy.grant`; a negative `amount` debits and
+        requires `economy.deduct`. The ledger row and the audit record are written in the same
+        transaction. A debit that would make the balance negative is rejected.
+      x-required-permission: economy.grant | economy.deduct
       parameters:
         - $ref: '#/components/parameters/GameId'
         - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -142,29 +442,126 @@ paths:
           application/json:
             schema:
               type: object
-              required: [currencyCode, delta, reason, ticketRef]
+              required: [currency, amount, reason]
               properties:
-                currencyCode: { type: string }
-                delta: { type: integer, format: int64, not: { const: 0 } }
-                reason: { type: string, minLength: 3 }
-                ticketRef: { type: string }
+                currency: { type: string, examples: [gold] }
+                amount:
+                  type: integer
+                  format: int64
+                  not: { const: 0 }
+                  description: Signed change in minor units.
+                  examples: [1000]
+                reason: { type: string, minLength: 3, examples: [customer compensation] }
+                ticket_id: { type: string, examples: [SUPPORT-12345] }
       responses:
-        '201': { description: Adjustment committed with ledger transaction and audit record }
-        '409': { description: Idempotency conflict or insufficient balance }
-        '403': { description: Missing economy.adjust permission or game scope }
-  /gm/v1/games/{gameId}/configs:
+        '201':
+          description: Adjustment committed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WalletTransaction' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Insufficient balance (`INSUFFICIENT_BALANCE`) or idempotency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /gm/v1/games/{game_id}/transactions:
+    get:
+      tags: [Economy]
+      operationId: listTransactions
+      summary: Query the wallet ledger of a game
+      x-required-permission: economy.read
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - name: player_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: currency
+          in: query
+          schema: { type: string }
+        - name: transaction_type
+          in: query
+          schema: { type: string }
+        - name: source_type
+          in: query
+          schema: { type: string }
+        - name: source_id
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ledger page, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/WalletTransaction' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/games/{game_id}/configs:
     get:
       tags: [Config]
       operationId: listConfigs
+      summary: List configs of a game with their active version
+      description: Retained from contract 1.0; not listed in section 6.2 of the design document.
+      x-required-permission: config.read
       parameters:
         - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
       responses:
-        '200': { description: Config list }
+        '200':
+          description: Configs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Config' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [Config]
       operationId: createConfig
+      summary: Create a config with its first draft version
+      x-required-permission: config.edit
       parameters:
         - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -172,23 +569,40 @@ paths:
           application/json:
             schema:
               type: object
-              required: [configKey, payload]
+              required: [config_key, content]
               properties:
-                configKey: { type: string }
+                config_key: { type: string }
                 description: { type: string }
-                payload: { type: object }
+                json_schema: { type: object, description: JSON Schema used by validation. }
+                content: { type: object }
       responses:
-        '201': { description: Draft created }
-  /gm/v1/games/{gameId}/configs/{configId}/versions:
+        '201':
+          description: Config and draft version 1 created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Config' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/configs/{config_id}/versions:
     post:
       tags: [Config]
       operationId: createConfigVersion
+      summary: Create a new draft version of a config
+      description: |
+        Retained from contract 1.0; not listed in section 6.2 of the design document. Versions are
+        immutable once validated, so editing a config means creating a new version.
+      x-required-permission: config.edit
       parameters:
         - $ref: '#/components/parameters/GameId'
-        - name: configId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ConfigId'
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -196,22 +610,197 @@ paths:
           application/json:
             schema:
               type: object
-              required: [payload]
+              required: [content]
               properties:
-                payload: { type: object }
-                schemaVersion: { type: integer, default: 1 }
+                content: { type: object }
+                schema_version: { type: integer, minimum: 1, default: 1 }
       responses:
-        '201': { description: Draft version created }
-  /gm/v1/games/{gameId}/configs/{configId}/publish:
+        '201':
+          description: Draft version created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConfigVersion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /gm/v1/games/{game_id}/configs/{config_id}/validate:
+    post:
+      tags: [Config]
+      operationId: validateConfigVersion
+      summary: Validate a draft version against the config's JSON Schema and business rules
+      x-required-permission: config.edit
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/ConfigId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Validation result. A failed validation is a 200 with `status = invalid`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConfigVersion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /gm/v1/games/{game_id}/configs/{config_id}/publish:
     post:
       tags: [Config]
       operationId: publishConfig
+      summary: Publish a validated version
+      description: Creates a new release. Only versions in `validated` status can be published.
+      x-required-permission: config.publish
       parameters:
         - $ref: '#/components/parameters/GameId'
-        - name: configId
+        - $ref: '#/components/parameters/ConfigId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, reason]
+              properties:
+                version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 3 }
+      responses:
+        '200':
+          description: Release created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConfigRelease' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Version is not validated (`CONFIG_VERSION_INVALID`) or idempotency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /gm/v1/games/{game_id}/configs/{config_id}/rollback:
+    post:
+      tags: [Config]
+      operationId: rollbackConfig
+      summary: Roll back to an earlier published version
+      description: Creates a new release of type `rollback` that points at the earlier version. No release is overwritten.
+      x-required-permission: config.publish
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/ConfigId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, reason]
+              properties:
+                version:
+                  type: integer
+                  minimum: 1
+                  description: Previously published version to make active again.
+                reason: { type: string, minLength: 3 }
+      responses:
+        '200':
+          description: Rollback release created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConfigRelease' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/mails:
+    post:
+      tags: [Mail]
+      operationId: createMail
+      summary: Create a mail draft
+      x-required-permission: mail.create
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content, target_type]
+              properties:
+                title: { type: string }
+                content: { type: string }
+                target_type: { type: string, enum: [all_players, player_list, segment] }
+                target_filter:
+                  type: object
+                  description: Player IDs for `player_list`, or segment conditions for `segment`.
+                attachments:
+                  type: array
+                  items: { $ref: '#/components/schemas/Reward' }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Mail draft created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Mail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/games/{game_id}/mails/{mail_id}/send:
+    post:
+      tags: [Mail]
+      operationId: sendMail
+      summary: Send a mail
+      description: |
+        Creates a background job executed by `game-worker` and returns its reference. Delivery to
+        each player is idempotent.
+      x-required-permission: mail.send
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - name: mail_id
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -219,20 +808,38 @@ paths:
           application/json:
             schema:
               type: object
-              required: [version, channel]
+              required: [reason]
               properties:
-                version: { type: integer, minimum: 1 }
-                channel: { type: string, default: production }
-                reason: { type: string }
+                reason: { type: string, minLength: 3 }
+                ticket_id: { type: string }
+                send_at:
+                  type: string
+                  format: date-time
+                  description: Scheduled send time. Absent means as soon as possible.
       responses:
-        '200': { description: Published after schema validation and authorization }
-        '409': { description: Version is invalid or stale }
-  /gm/v1/games/{gameId}/mails:
+        '202':
+          description: Delivery job accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RewardJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/activities:
     post:
-      tags: [Operations]
-      operationId: createMail
+      tags: [Activity]
+      operationId: createActivity
+      summary: Create an activity
+      x-required-permission: activity.manage
       parameters:
         - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -240,70 +847,354 @@ paths:
           application/json:
             schema:
               type: object
-              required: [title, body]
+              required: [activity_code, activity_type, name, start_at, end_at]
               properties:
-                title: { type: string }
-                body: { type: object }
-                reward: { type: object }
-                startsAt: { type: string, format: date-time }
-                expiresAt: { type: string, format: date-time }
+                activity_code: { type: string }
+                activity_type: { type: string }
+                name: { type: string }
+                config: { type: object, description: Tasks and reward table. }
+                start_at: { type: string, format: date-time }
+                end_at: { type: string, format: date-time }
       responses:
-        '201': { description: Mail draft created }
-  /gm/v1/admin/users:
-    get:
-      tags: [Admin]
-      operationId: listAdminUsers
-      responses:
-        '200': { description: Admin user list }
+        '201':
+          description: Activity created in `draft` status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Activity' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/games/{game_id}/announcements:
     post:
-      tags: [Admin]
-      operationId: createAdminUser
+      tags: [Announcement]
+      operationId: createAnnouncement
+      summary: Create an announcement for a game
+      x-required-permission: announcement.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email]
+              required: [title, content, start_at, end_at]
               properties:
-                email: { type: string, format: email }
-                roleAssignments: { type: array, items: { type: object } }
+                title: { type: string }
+                content: { type: string }
+                priority: { type: integer, default: 0 }
+                start_at: { type: string, format: date-time }
+                end_at: { type: string, format: date-time }
       responses:
-        '201': { description: Admin invitation created }
+        '201':
+          description: Announcement created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Announcement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/games/{game_id}/leaderboards:
+    get:
+      tags: [Ranking]
+      operationId: listLeaderboards
+      summary: List leaderboards of a game
+      x-required-permission: ranking.read
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Leaderboards
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Leaderboard' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/admins:
+    get:
+      tags: [Admin]
+      operationId: listAdmins
+      summary: List administrators
+      x-required-permission: admin.read
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Administrator page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Admin' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      operationId: createAdmin
+      summary: Create an administrator
+      description: The new administrator sets a password and enrolls MFA at first login. No password is returned.
+      x-required-permission: admin.manage
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+                email: { type: string, format: email }
+                display_name: { type: string }
+                role_assignments:
+                  type: array
+                  items: { $ref: '#/components/schemas/RoleAssignment' }
+      responses:
+        '201':
+          description: Administrator created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Admin' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /gm/v1/roles:
+    get:
+      tags: [RBAC]
+      operationId: listRoles
+      summary: List roles with their permission codes
+      x-required-permission: admin.read
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Roles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Role' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/roles/{role_id}/permissions:
+    put:
+      tags: [RBAC]
+      operationId: setRolePermissions
+      summary: Replace the permission set of a role
+      x-required-permission: rbac.manage
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission_codes, reason]
+              properties:
+                permission_codes:
+                  type: array
+                  items: { type: string }
+                reason: { type: string, minLength: 3 }
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Role' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /gm/v1/audit-logs:
     get:
       tags: [Audit]
       operationId: searchAuditLogs
+      summary: Query GM audit logs
+      description: Results are limited to the games the administrator is scoped to. Platform-level entries require platform scope.
+      x-required-permission: audit.read
       parameters:
-        - name: gameId
+        - $ref: '#/components/parameters/RequestId'
+        - name: game_id
           in: query
           schema: { type: string, format: uuid }
+        - name: admin_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: target_type
+          in: query
+          schema: { type: string }
+        - name: target_id
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200': { description: Append-only audit log page }
+        '200':
+          description: Audit log page, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/AuditLog' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/analytics/overview:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsOverview
+      summary: Operations overview for one game
+      x-required-permission: analytics.read
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: game_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Daily metrics for the date range
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [game_id, days]
+                        properties:
+                          game_id: { type: string, format: uuid }
+                          days:
+                            type: array
+                            items: { $ref: '#/components/schemas/DailyGameStats' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 components:
   securitySchemes:
     AdminBearer:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: Administrator access token issued after MFA. Separate issuer, audience and signing keys from the player plane.
   parameters:
-    GameId:
-      name: gameId
-      in: path
-      required: true
-      schema: { type: string, format: uuid }
-    PlayerId:
-      name: playerId
-      in: path
-      required: true
-      schema: { type: string, format: uuid }
+    RequestId:
+      name: X-Request-ID
+      in: header
+      schema: { type: string, maxLength: 64 }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
       schema: { type: string, minLength: 8, maxLength: 128 }
+    GameId:
+      name: game_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PlayerId:
+      name: player_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConfigId:
+      name: config_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     Cursor:
       name: cursor
       in: query
@@ -312,23 +1203,327 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing, invalid or expired administrator credentials (`AUTH_UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Missing permission code or game scope (`AUTH_FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found in this game (`RESOURCE_NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State or idempotency conflict (`IDEMPOTENCY_CONFLICT`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit exceeded (`RATE_LIMITED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
   schemas:
-    Game:
+    Envelope:
       type: object
+      required: [code, message, request_id]
       properties:
-        gameId: { type: string, format: uuid }
+        code: { type: string, examples: [OK] }
+        message: { type: string, examples: [success] }
+        data: {}
+        request_id: { type: string }
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, description: Stable machine-readable code. }
+        message: { type: string }
+        data: {}
+        request_id: { type: string }
+    AdminTokens:
+      type: object
+      required: [access_token, refresh_token, expires_in]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: Access token lifetime in seconds. }
+        admin: { $ref: '#/components/schemas/Admin' }
+    RoleAssignment:
+      type: object
+      required: [role_code, scope_type]
+      properties:
+        role_code: { type: string }
+        scope_type: { type: string, enum: [platform, game] }
+        game_id:
+          type: [string, 'null']
+          format: uuid
+          description: Required when `scope_type` is `game`.
+    Admin:
+      type: object
+      required: [admin_id, username, status]
+      properties:
+        admin_id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: [string, 'null'] }
+        display_name: { type: [string, 'null'] }
+        status: { type: string, enum: [active, disabled, locked] }
+        mfa_enabled: { type: boolean }
+        role_assignments:
+          type: array
+          items: { $ref: '#/components/schemas/RoleAssignment' }
+        last_login_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    Role:
+      type: object
+      required: [role_id, code, name, permission_codes]
+      properties:
+        role_id: { type: string, format: uuid }
         code: { type: string }
         name: { type: string }
-        status: { type: string }
+        description: { type: [string, 'null'] }
+        is_system: { type: boolean }
+        permission_codes:
+          type: array
+          items: { type: string }
+    Game:
+      type: object
+      required: [game_id, code, name, status]
+      properties:
+        game_id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [active, disabled, archived] }
+        platform_apps:
+          type: array
+          items:
+            type: object
+            required: [platform, app_id, status]
+            properties:
+              platform: { type: string }
+              app_id: { type: string }
+              status: { type: string, enum: [active, disabled] }
+        created_at: { type: string, format: date-time }
     Player:
       type: object
+      required: [player_id, status, created_at]
       properties:
-        playerId: { type: string, format: uuid }
-        displayName: { type: string }
-        status: { type: string }
-        createdAt: { type: string, format: date-time }
-    PlayerPage:
+        player_id: { type: string, format: uuid }
+        nickname: { type: [string, 'null'] }
+        avatar_url: { type: [string, 'null'] }
+        status: { type: string, enum: [active, banned, deleted] }
+        last_login_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    PlayerDetail:
+      allOf:
+        - $ref: '#/components/schemas/Player'
+        - type: object
+          properties:
+            identities:
+              type: array
+              items:
+                type: object
+                properties:
+                  platform: { type: string }
+                  app_id: { type: string }
+                  openid: { type: string }
+            active_ban:
+              oneOf:
+                - $ref: '#/components/schemas/PlayerBan'
+                - type: 'null'
+            save:
+              type: [object, 'null']
+              properties:
+                schema_version: { type: integer }
+                save_version: { type: integer, format: int64 }
+                updated_at: { type: string, format: date-time }
+            save_snapshots:
+              type: array
+              items:
+                type: object
+                properties:
+                  snapshot_id: { type: string, format: uuid }
+                  save_version: { type: integer, format: int64 }
+                  snapshot_reason: { type: string }
+                  created_at: { type: string, format: date-time }
+    PlayerBan:
       type: object
+      required: [ban_id, reason, starts_at]
       properties:
-        items: { type: array, items: { $ref: '#/components/schemas/Player' } }
-        nextCursor: { type: string, nullable: true }
+        ban_id: { type: string, format: uuid }
+        reason: { type: string }
+        ticket_id: { type: [string, 'null'] }
+        starts_at: { type: string, format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+        banned_by: { type: [string, 'null'], format: uuid }
+    Reward:
+      type: object
+      required: [type, id, quantity]
+      properties:
+        type: { type: string, enum: [currency, item] }
+        id: { type: string, description: Currency code or item ID. }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    Wallet:
+      type: object
+      required: [currency, balance]
+      properties:
+        currency: { type: string }
+        balance: { type: integer, format: int64, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+    WalletTransaction:
+      type: object
+      required: [id, player_id, currency, direction, amount, balance_after, transaction_type, source_type, source_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        player_id: { type: string, format: uuid }
+        currency: { type: string }
+        direction: { type: string, enum: [credit, debit] }
+        amount: { type: integer, format: int64, minimum: 1 }
+        balance_after: { type: integer, format: int64 }
+        transaction_type: { type: string }
+        source_type: { type: string }
+        source_id: { type: string }
+        actor_type: { type: string, enum: [player, admin, service, system] }
+        actor_id: { type: [string, 'null'] }
+        reason: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    Config:
+      type: object
+      required: [config_id, config_key, status]
+      properties:
+        config_id: { type: string, format: uuid }
+        config_key: { type: string }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [active, archived] }
+        active_version: { type: [integer, 'null'] }
+        latest_version: { type: [integer, 'null'] }
+        updated_at: { type: string, format: date-time }
+    ConfigVersion:
+      type: object
+      required: [version_id, config_id, version, status, checksum_sha256]
+      properties:
+        version_id: { type: string, format: uuid }
+        config_id: { type: string, format: uuid }
+        version: { type: integer }
+        status: { type: string, enum: [draft, validated, invalid, published] }
+        checksum_sha256: { type: string }
+        validation_errors:
+          type: [array, 'null']
+          items: { type: object }
+        created_by: { type: [string, 'null'], format: uuid }
+        created_at: { type: string, format: date-time }
+    ConfigRelease:
+      type: object
+      required: [release_id, release_type, items, released_at]
+      properties:
+        release_id: { type: string, format: uuid }
+        release_type: { type: string, enum: [publish, rollback] }
+        rollback_of_release_id: { type: [string, 'null'], format: uuid }
+        reason: { type: [string, 'null'] }
+        items:
+          type: array
+          items:
+            type: object
+            required: [config_id, version]
+            properties:
+              config_id: { type: string, format: uuid }
+              version: { type: integer }
+        released_by: { type: [string, 'null'], format: uuid }
+        released_at: { type: string, format: date-time }
+    Mail:
+      type: object
+      required: [mail_id, title, target_type, status]
+      properties:
+        mail_id: { type: string, format: uuid }
+        title: { type: string }
+        content: { type: string }
+        target_type: { type: string, enum: [all_players, player_list, segment] }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Reward' }
+        status: { type: string, enum: [draft, scheduled, sending, sent, cancelled, failed] }
+        expires_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    RewardJob:
+      type: object
+      required: [job_id, job_type, status]
+      properties:
+        job_id: { type: string, format: uuid }
+        job_type: { type: string, enum: [mail_delivery, batch_reward, compensation] }
+        status: { type: string, enum: [pending, running, succeeded, failed, cancelled] }
+        target_count: { type: integer, format: int64 }
+        processed_count: { type: integer, format: int64 }
+        failed_count: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+    Activity:
+      type: object
+      required: [activity_id, activity_code, activity_type, status, start_at, end_at]
+      properties:
+        activity_id: { type: string, format: uuid }
+        activity_code: { type: string }
+        activity_type: { type: string }
+        name: { type: string }
+        config: { type: object }
+        status: { type: string, enum: [draft, published, disabled, ended] }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+    Announcement:
+      type: object
+      required: [announcement_id, title, status, start_at, end_at]
+      properties:
+        announcement_id: { type: string, format: uuid }
+        title: { type: string }
+        content: { type: string }
+        priority: { type: integer }
+        status: { type: string, enum: [draft, published, archived] }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+    Leaderboard:
+      type: object
+      required: [board_id, board_code, period, status]
+      properties:
+        board_id: { type: string, format: uuid }
+        board_code: { type: string }
+        name: { type: string }
+        period: { type: string, enum: [all_time, daily, weekly, monthly, season] }
+        ranking_rule: { type: object }
+        status: { type: string, enum: [active, disabled] }
+    AuditLog:
+      type: object
+      required: [id, action, target_type, request_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        admin_id: { type: [string, 'null'], format: uuid }
+        game_id: { type: [string, 'null'], format: uuid }
+        action: { type: string }
+        target_type: { type: string }
+        target_id: { type: [string, 'null'] }
+        before_data: { description: Redacted snapshot before the change. }
+        after_data: { description: Redacted snapshot after the change. }
+        reason: { type: [string, 'null'] }
+        ticket_id: { type: [string, 'null'] }
+        request_id: { type: string }
+        created_at: { type: string, format: date-time }
+    DailyGameStats:
+      type: object
+      required: [stat_date, metrics]
+      properties:
+        stat_date: { type: string, format: date }
+        metrics:
+          type: object
+          description: For example dau, new_players, runs, settlements, ad_claims, retention_d1.

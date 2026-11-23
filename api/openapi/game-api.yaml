@@ -1,0 +1,1077 @@
+openapi: 3.1.0
+info:
+  title: Game Platform Game API
+  version: 2.0.0
+  description: |
+    Player-facing API served by `game-api`. Design baseline v2.0 (2026-11-23); see
+    docs/game-platform-technical-design.md section 6.1.
+
+    Rules that apply to every operation:
+
+    - The player and the game are taken from the verified access token. No operation accepts an
+      arbitrary `player_id` or `game_id`. At login the game is resolved server-side from the
+      platform app (`app_id`).
+    - Responses use the envelope `{ code, message, data, request_id }`.
+    - Mutations that change assets or create resources require `Idempotency-Key`.
+    - Currency and item amounts are integers in minor units. Times are RFC 3339 UTC.
+    - Client-reported results (run result, ad completion) are untrusted input. Rewards and
+      balances are always decided by the server.
+servers:
+  - url: https://api.example.com
+security:
+  - PlayerBearer: []
+tags:
+  - name: Auth
+  - name: Player
+  - name: Config
+  - name: Save
+  - name: Gameplay
+  - name: Economy
+  - name: Items
+  - name: Ads
+  - name: Mail
+  - name: Activity
+  - name: Ranking
+  - name: Events
+paths:
+  /api/v1/auth/wechat/login:
+    post:
+      tags: [Auth]
+      operationId: wechatLogin
+      summary: Exchange a WeChat login code for platform tokens
+      description: |
+        The server maps `app_id` to a game, calls WeChat `jscode2session` with that app's secret,
+        and maps or creates the game-scoped player. The WeChat `session_key` is never returned.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [app_id, code]
+              properties:
+                app_id:
+                  type: string
+                  description: WeChat Mini Game AppID. Used only to select the configured platform app.
+                code:
+                  type: string
+                  minLength: 1
+                  description: Temporary code from `wx.login()`.
+                device_id:
+                  type: string
+                  maxLength: 128
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AuthTokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Rotate the refresh token and issue a new access token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Rotated tokens. The previous refresh token is no longer valid.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current session
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/player/profile:
+    get:
+      tags: [Player]
+      operationId: getProfile
+      summary: Get the current player's profile
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Player profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PlayerProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Player]
+      operationId: updateProfile
+      summary: Update the current player's profile
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                nickname: { type: string, minLength: 1, maxLength: 32 }
+                avatar_url: { type: string, format: uri, maxLength: 512 }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/player/bootstrap:
+    get:
+      tags: [Player]
+      operationId: getBootstrap
+      summary: Fetch the data a client needs at startup in one call
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Bootstrap payload
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Bootstrap' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/configs:
+    get:
+      tags: [Config]
+      operationId: listConfigs
+      summary: Get the index of active config versions
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Config index for the player's game
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/ConfigIndexEntry' }
+        '304': { description: Not modified }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/configs/{key}:
+    get:
+      tags: [Config]
+      operationId: getConfig
+      summary: Get the active version of one config
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Config content, or a CDN URL when the payload is stored in object storage
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Config' }
+        '304': { description: Not modified }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/player/save:
+    get:
+      tags: [Save]
+      operationId: getSave
+      summary: Read the current save
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Current save. The ETag is the quoted `save_version`.
+          headers:
+            ETag: { schema: { type: string, examples: ['"12"'] } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Save' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Save]
+      operationId: updateSave
+      summary: Update the save with optimistic locking
+      description: |
+        The write succeeds only if `If-Match` equals the current `save_version`; the version is
+        then incremented. Save data never changes wallets, items or entitlements.
+        For the first save of a player, send `If-Match: "0"`.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string, examples: ['"12"'] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schema_version, save_data]
+              properties:
+                schema_version: { type: integer, minimum: 1 }
+                save_data: { type: object }
+      responses:
+        '200':
+          description: Save updated
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Save' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '412':
+          description: The save was changed by another session (`SAVE_VERSION_CONFLICT`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413': { description: Save payload exceeds the configured size limit }
+  /api/v1/runs:
+    post:
+      tags: [Gameplay]
+      operationId: createRun
+      summary: Create a game run
+      description: The server generates the run ID and records level, difficulty and rule version.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level_id]
+              properties:
+                level_id: { type: string }
+                difficulty: { type: string }
+                mode: { type: string }
+      responses:
+        '201':
+          description: Run created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GameRun' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/runs/{run_id}/settlement:
+    post:
+      tags: [Gameplay]
+      operationId: settleRun
+      summary: Settle a game run
+      description: |
+        The server validates run ownership, state, expiry, costs and reward caps, then writes the
+        settlement, asset changes and ledger rows in one transaction. A run can be settled once.
+        The client result is an untrusted summary; the response carries the rewards the server
+        actually granted.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [result]
+              properties:
+                result:
+                  type: object
+                  description: Client-reported result summary (for example score, win flag, duration).
+                client_proof:
+                  type: object
+                  description: Optional material for server-side validation or replay.
+      responses:
+        '200':
+          description: Settlement decision
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Settlement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Run already settled (`GAME_RUN_ALREADY_SETTLED`), expired, or idempotency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/v1/wallets:
+    get:
+      tags: [Economy]
+      operationId: listWallets
+      summary: Get the current player's balances
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Wallet balances
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Wallet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/wallets/transactions:
+    get:
+      tags: [Economy]
+      operationId: listWalletTransactions
+      summary: Page through the current player's wallet ledger
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: currency
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ledger page, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/WalletTransaction' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/items:
+    get:
+      tags: [Items]
+      operationId: listItems
+      summary: Get the current player's item inventory
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Item inventory
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/PlayerItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/ads/placements:
+    get:
+      tags: [Ads]
+      operationId: listAdPlacements
+      summary: List rewarded ad placements and the player's remaining claims today
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Ad placements
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/AdPlacement' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/ads/sessions:
+    post:
+      tags: [Ads]
+      operationId: createAdSession
+      summary: Create a short-lived ad session before showing a rewarded ad
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [placement_code]
+              properties:
+                placement_code: { type: string }
+      responses:
+        '201':
+          description: Ad session created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Daily limit reached or placement disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/ads/sessions/{session_id}/claim:
+    post:
+      tags: [Ads]
+      operationId: claimAdReward
+      summary: Claim the reward of an ad session
+      description: |
+        The server checks session ownership, expiry, placement, daily limit and single claim, then
+        grants the reward through the economy service. The client completion flag is evidence only
+        and is not proof that the ad was watched.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_completed]
+              properties:
+                client_completed:
+                  type: boolean
+                  description: Value of `isEnded` observed by the client in `onClose`.
+      responses:
+        '200':
+          description: Claim decision
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RewardResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Session already claimed, expired, or daily limit reached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/v1/mails:
+    get:
+      tags: [Mail]
+      operationId: listMails
+      summary: Page through the current player's mail
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Mail page, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/PlayerMail' }
+                          next_cursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/mails/{mail_id}/claim:
+    post:
+      tags: [Mail]
+      operationId: claimMail
+      summary: Claim the attachments of a mail
+      parameters:
+        - name: mail_id
+          in: path
+          required: true
+          description: ID of the player's mail entry (`PlayerMail.id`).
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Attachments granted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RewardResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already claimed, expired, or no attachments
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/v1/activities:
+    get:
+      tags: [Activity]
+      operationId: listActivities
+      summary: List activities currently visible to the player
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Activities with the player's claim state
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Activity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/activities/{activity_id}/claim:
+    post:
+      tags: [Activity]
+      operationId: claimActivityReward
+      summary: Claim one reward of an activity
+      parameters:
+        - name: activity_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reward_id]
+              properties:
+                reward_id:
+                  type: string
+                  description: Reward entry inside the activity configuration.
+      responses:
+        '200':
+          description: Reward granted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RewardResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already claimed, conditions not met, or activity not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/v1/leaderboards/{board_code}:
+    get:
+      tags: [Ranking]
+      operationId: getLeaderboard
+      summary: Get the top entries of a leaderboard and the player's own rank
+      parameters:
+        - name: board_code
+          in: path
+          required: true
+          schema: { type: string }
+        - name: period_key
+          in: query
+          description: Period to read. Defaults to the current period of the board.
+          schema: { type: string }
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Leaderboard page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Leaderboard' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/events/batch:
+    post:
+      tags: [Events]
+      operationId: uploadEvents
+      summary: Upload a batch of client analytics events
+      description: Events are deduplicated by `event_id`. They are reporting data and never change assets.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/ClientEvent' }
+      responses:
+        '202':
+          description: Events accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          accepted: { type: integer }
+                          duplicates: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+components:
+  securitySchemes:
+    PlayerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Platform-issued player access token. Carries `player_id` and `game_id`. Signed with keys separate from the GM plane.
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      description: Client-generated request ID. The server generates one when it is absent and always returns `request_id`.
+      schema: { type: string, maxLength: 64 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing, invalid or expired credentials (`AUTH_UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Player banned (`AUTH_FORBIDDEN`) or game disabled (`GAME_DISABLED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`RESOURCE_NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State or idempotency conflict (`IDEMPOTENCY_CONFLICT`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit exceeded (`RATE_LIMITED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, examples: [OK] }
+        message: { type: string, examples: [success] }
+        data: {}
+        request_id: { type: string }
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code. The list below is the baseline set and may be extended.
+          examples:
+            - AUTH_UNAUTHORIZED
+            - AUTH_FORBIDDEN
+            - PLAYER_NOT_FOUND
+            - GAME_DISABLED
+            - SAVE_VERSION_CONFLICT
+            - GAME_RUN_ALREADY_SETTLED
+            - INSUFFICIENT_BALANCE
+            - IDEMPOTENCY_CONFLICT
+            - CONFIG_VERSION_INVALID
+            - RESOURCE_NOT_FOUND
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        message: { type: string }
+        data: {}
+        request_id: { type: string }
+    AuthTokens:
+      type: object
+      required: [access_token, refresh_token, expires_in, player]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: Access token lifetime in seconds. }
+        player: { $ref: '#/components/schemas/PlayerProfile' }
+    PlayerProfile:
+      type: object
+      required: [player_id, status]
+      properties:
+        player_id: { type: string, format: uuid }
+        nickname: { type: [string, 'null'] }
+        avatar_url: { type: [string, 'null'] }
+        status: { type: string, enum: [active, banned] }
+        created_at: { type: string, format: date-time }
+    Bootstrap:
+      type: object
+      required: [player, server_time, wallets]
+      properties:
+        player: { $ref: '#/components/schemas/PlayerProfile' }
+        server_time: { type: string, format: date-time }
+        save_version: { type: integer, format: int64, description: 0 when the player has no save yet. }
+        wallets:
+          type: array
+          items: { $ref: '#/components/schemas/Wallet' }
+        configs:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigIndexEntry' }
+        unread_mail_count: { type: integer }
+    ConfigIndexEntry:
+      type: object
+      required: [key, version, checksum_sha256]
+      properties:
+        key: { type: string }
+        version: { type: integer }
+        checksum_sha256: { type: string }
+        url: { type: [string, 'null'], format: uri, description: CDN URL when the payload is stored in object storage. }
+    Config:
+      type: object
+      required: [key, version, checksum_sha256]
+      properties:
+        key: { type: string }
+        version: { type: integer }
+        checksum_sha256: { type: string }
+        content: { description: Inline payload. Absent when `url` is set. }
+        url: { type: [string, 'null'], format: uri }
+    Save:
+      type: object
+      required: [schema_version, save_version, save_data]
+      properties:
+        schema_version: { type: integer }
+        save_version: { type: integer, format: int64 }
+        save_data: { type: object }
+        updated_at: { type: string, format: date-time }
+    GameRun:
+      type: object
+      required: [run_id, level_id, status, expires_at]
+      properties:
+        run_id: { type: string, format: uuid }
+        level_id: { type: string }
+        difficulty: { type: [string, 'null'] }
+        mode: { type: [string, 'null'] }
+        rule_version: { type: [string, 'null'] }
+        status: { type: string, enum: [started, settled, expired, rejected, abandoned] }
+        started_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    Reward:
+      type: object
+      required: [type, id, quantity]
+      properties:
+        type: { type: string, enum: [currency, item] }
+        id: { type: string, description: Currency code or item ID. }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    Settlement:
+      type: object
+      required: [settlement_id, validation_status, rewards]
+      properties:
+        settlement_id: { type: string, format: uuid }
+        validation_status: { type: string, enum: [accepted, rejected, review] }
+        rewards:
+          type: array
+          items: { $ref: '#/components/schemas/Reward' }
+        wallets:
+          type: array
+          description: Balances after settlement.
+          items: { $ref: '#/components/schemas/Wallet' }
+    RewardResult:
+      type: object
+      required: [granted, rewards]
+      properties:
+        granted: { type: boolean }
+        rewards:
+          type: array
+          items: { $ref: '#/components/schemas/Reward' }
+        wallets:
+          type: array
+          description: Balances after the grant.
+          items: { $ref: '#/components/schemas/Wallet' }
+    Wallet:
+      type: object
+      required: [currency, balance]
+      properties:
+        currency: { type: string }
+        balance: { type: integer, format: int64, minimum: 0 }
+    WalletTransaction:
+      type: object
+      required: [id, currency, direction, amount, balance_after, transaction_type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        currency: { type: string }
+        direction: { type: string, enum: [credit, debit] }
+        amount: { type: integer, format: int64, minimum: 1 }
+        balance_after: { type: integer, format: int64 }
+        transaction_type: { type: string }
+        created_at: { type: string, format: date-time }
+    PlayerItem:
+      type: object
+      required: [item_id, quantity]
+      properties:
+        item_id: { type: string }
+        item_type: { type: string }
+        quantity: { type: integer, format: int64, minimum: 0 }
+    AdPlacement:
+      type: object
+      required: [placement_code, daily_limit, remaining_today]
+      properties:
+        placement_code: { type: string }
+        ad_unit_id: { type: [string, 'null'] }
+        daily_limit: { type: integer }
+        remaining_today: { type: integer }
+        rewards:
+          type: array
+          items: { $ref: '#/components/schemas/Reward' }
+    AdSession:
+      type: object
+      required: [session_id, placement_code, expires_at]
+      properties:
+        session_id: { type: string, format: uuid }
+        placement_code: { type: string }
+        expires_at: { type: string, format: date-time }
+    PlayerMail:
+      type: object
+      required: [id, title, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        content: { type: string }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Reward' }
+        read_at: { type: [string, 'null'], format: date-time }
+        claimed_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    Activity:
+      type: object
+      required: [activity_id, activity_code, activity_type, start_at, end_at]
+      properties:
+        activity_id: { type: string, format: uuid }
+        activity_code: { type: string }
+        activity_type: { type: string }
+        name: { type: string }
+        config: { type: object, description: Client-visible part of the activity configuration. }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        claimed_reward_ids:
+          type: array
+          items: { type: string }
+    LeaderboardEntry:
+      type: object
+      required: [rank, player_id, score]
+      properties:
+        rank: { type: integer, minimum: 1 }
+        player_id: { type: string, format: uuid }
+        nickname: { type: [string, 'null'] }
+        avatar_url: { type: [string, 'null'] }
+        score: { type: integer, format: int64 }
+    Leaderboard:
+      type: object
+      required: [board_code, period_key, entries]
+      properties:
+        board_code: { type: string }
+        period_key: { type: string }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/LeaderboardEntry' }
+        self:
+          description: The current player's entry, or null when the player has no score.
+          oneOf:
+            - $ref: '#/components/schemas/LeaderboardEntry'
+            - type: 'null'
+    ClientEvent:
+      type: object
+      required: [event_id, event_type, occurred_at]
+      properties:
+        event_id: { type: string, maxLength: 64 }
+        event_type: { type: string, maxLength: 64 }
+        occurred_at: { type: string, format: date-time }
+        payload: { type: object }
