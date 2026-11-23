@@ -18,6 +18,8 @@ CREATE SCHEMA IF NOT EXISTS operation;
 CREATE SCHEMA IF NOT EXISTS admin;
 CREATE SCHEMA IF NOT EXISTS audit;
 CREATE SCHEMA IF NOT EXISTS system;
+CREATE SCHEMA IF NOT EXISTS ranking;
+CREATE SCHEMA IF NOT EXISTS analytics;
 
 -- Platform registry
 CREATE TABLE platform.games (
@@ -197,7 +199,7 @@ CREATE TABLE gameplay.run_settlements (
     reward jsonb NOT NULL DEFAULT '{}'::jsonb,
     validation_status text NOT NULL CHECK (validation_status IN ('accepted','rejected','review')),
     settled_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (game_id, run_id) REFERENCES gameplay.runs(game_id, id),
+    FOREIGN KEY (game_id, run_id, player_id) REFERENCES gameplay.runs(game_id, id, player_id),
     FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id),
     UNIQUE (game_id, run_id),
     UNIQUE (game_id, id)
@@ -399,13 +401,17 @@ CREATE TABLE admin.permissions (
 );
 
 CREATE TABLE admin.user_roles (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     admin_user_id uuid NOT NULL REFERENCES admin.users(id),
     role_id uuid NOT NULL REFERENCES admin.roles(id),
-    game_id uuid REFERENCES platform.games(id), -- NULL means platform-wide only when explicitly granted
+    game_id uuid REFERENCES platform.games(id), -- NULL is an explicit platform-wide assignment
     granted_by uuid REFERENCES admin.users(id),
-    granted_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (admin_user_id, role_id, game_id)
+    granted_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX admin_user_roles_game_uniq
+    ON admin.user_roles(admin_user_id, role_id, game_id) WHERE game_id IS NOT NULL;
+CREATE UNIQUE INDEX admin_user_roles_platform_uniq
+    ON admin.user_roles(admin_user_id, role_id) WHERE game_id IS NULL;
 
 CREATE TABLE admin.role_permissions (
     role_id uuid NOT NULL REFERENCES admin.roles(id),
@@ -429,6 +435,47 @@ CREATE TABLE audit.admin_logs (
 );
 CREATE INDEX admin_logs_game_time_idx ON audit.admin_logs(game_id, created_at DESC);
 CREATE INDEX admin_logs_actor_time_idx ON audit.admin_logs(admin_user_id, created_at DESC);
+
+-- Leaderboards and analytics events (derived/reporting data, not economy authority)
+CREATE TABLE ranking.leaderboards (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    game_id uuid NOT NULL REFERENCES platform.games(id),
+    board_code text NOT NULL,
+    score_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+    reset_policy text NOT NULL DEFAULT 'never',
+    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+    UNIQUE (game_id, id),
+    UNIQUE (game_id, board_code)
+);
+
+CREATE TABLE ranking.entries (
+    game_id uuid NOT NULL,
+    leaderboard_id uuid NOT NULL,
+    player_id uuid NOT NULL,
+    score bigint NOT NULL,
+    rank_position bigint,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (game_id, leaderboard_id, player_id),
+    FOREIGN KEY (game_id, leaderboard_id) REFERENCES ranking.leaderboards(game_id, id),
+    FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id)
+);
+CREATE INDEX ranking_entries_score_idx
+    ON ranking.entries(game_id, leaderboard_id, score DESC, player_id);
+
+CREATE TABLE analytics.game_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    game_id uuid NOT NULL REFERENCES platform.games(id),
+    player_id uuid,
+    event_id text NOT NULL,
+    event_type text NOT NULL,
+    occurred_at timestamptz NOT NULL,
+    received_at timestamptz NOT NULL DEFAULT now(),
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id),
+    UNIQUE (game_id, event_id)
+);
+CREATE INDEX game_events_type_time_idx
+    ON analytics.game_events(game_id, event_type, occurred_at DESC);
 
 -- Idempotency and transactional outbox
 CREATE TABLE system.idempotency_keys (
