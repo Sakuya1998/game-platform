@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: Game Platform GM API
+  version: 1.0.0
+  description: Restricted operator API. Uses a separate identity plane, MFA, RBAC, game scope, and immutable audit.
+servers:
+  - url: https://gm-api.example.com
+security:
+  - AdminBearer: []
+tags:
+  - name: Auth
+  - name: Games
+  - name: Players
+  - name: Economy
+  - name: Config
+  - name: Operations
+  - name: Admin
+  - name: Audit
+paths:
+  /gm/v1/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      operationId: adminLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: MFA challenge or authenticated session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mfaRequired: { type: boolean }
+                  challengeToken: { type: string }
+                  accessToken: { type: string }
+                  expiresIn: { type: integer }
+        '401': { description: Invalid credentials }
+  /gm/v1/auth/mfa/verify:
+    post:
+      tags: [Auth]
+      security: []
+      operationId: verifyMfa
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeToken, code]
+              properties:
+                challengeToken: { type: string }
+                code: { type: string }
+      responses:
+        '200': { description: MFA verified; admin session issued }
+        '401': { description: Invalid or expired challenge }
+  /gm/v1/games:
+    get:
+      tags: [Games]
+      operationId: listGames
+      responses:
+        '200':
+          description: Games visible to the administrator
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Game' }
+  /gm/v1/games/{gameId}/players:
+    get:
+      tags: [Players]
+      operationId: searchPlayers
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - name: keyword
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Player search page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerPage' }
+        '403': { description: Missing player.read permission or game scope }
+  /gm/v1/games/{gameId}/players/{playerId}:
+    get:
+      tags: [Players]
+      operationId: getPlayer
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+      responses:
+        '200':
+          description: Player detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Player' }
+    post:
+      tags: [Players]
+      operationId: changePlayerStatus
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, reason]
+              properties:
+                status: { type: string, enum: [active, banned] }
+                reason: { type: string, minLength: 3 }
+                ticketRef: { type: string }
+      responses:
+        '200': { description: Status changed and audited }
+        '403': { description: Forbidden }
+  /gm/v1/games/{gameId}/players/{playerId}/wallet-adjustments:
+    post:
+      tags: [Economy]
+      operationId: adjustWallet
+      description: Ledger-backed adjustment only; direct balance replacement is forbidden.
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currencyCode, delta, reason, ticketRef]
+              properties:
+                currencyCode: { type: string }
+                delta: { type: integer, format: int64, not: { const: 0 } }
+                reason: { type: string, minLength: 3 }
+                ticketRef: { type: string }
+      responses:
+        '201': { description: Adjustment committed with ledger transaction and audit record }
+        '409': { description: Idempotency conflict or insufficient balance }
+        '403': { description: Missing economy.adjust permission or game scope }
+  /gm/v1/games/{gameId}/configs:
+    get:
+      tags: [Config]
+      operationId: listConfigs
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+      responses:
+        '200': { description: Config list }
+    post:
+      tags: [Config]
+      operationId: createConfig
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [configKey, payload]
+              properties:
+                configKey: { type: string }
+                description: { type: string }
+                payload: { type: object }
+      responses:
+        '201': { description: Draft created }
+  /gm/v1/games/{gameId}/configs/{configId}/versions:
+    post:
+      tags: [Config]
+      operationId: createConfigVersion
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - name: configId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload: { type: object }
+                schemaVersion: { type: integer, default: 1 }
+      responses:
+        '201': { description: Draft version created }
+  /gm/v1/games/{gameId}/configs/{configId}/publish:
+    post:
+      tags: [Config]
+      operationId: publishConfig
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - name: configId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, channel]
+              properties:
+                version: { type: integer, minimum: 1 }
+                channel: { type: string, default: production }
+                reason: { type: string }
+      responses:
+        '200': { description: Published after schema validation and authorization }
+        '409': { description: Version is invalid or stale }
+  /gm/v1/games/{gameId}/mails:
+    post:
+      tags: [Operations]
+      operationId: createMail
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body]
+              properties:
+                title: { type: string }
+                body: { type: object }
+                reward: { type: object }
+                startsAt: { type: string, format: date-time }
+                expiresAt: { type: string, format: date-time }
+      responses:
+        '201': { description: Mail draft created }
+  /gm/v1/admin/users:
+    get:
+      tags: [Admin]
+      operationId: listAdminUsers
+      responses:
+        '200': { description: Admin user list }
+    post:
+      tags: [Admin]
+      operationId: createAdminUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                roleAssignments: { type: array, items: { type: object } }
+      responses:
+        '201': { description: Admin invitation created }
+  /gm/v1/audit-logs:
+    get:
+      tags: [Audit]
+      operationId: searchAuditLogs
+      parameters:
+        - name: gameId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Append-only audit log page }
+components:
+  securitySchemes:
+    AdminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    GameId:
+      name: gameId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PlayerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  schemas:
+    Game:
+      type: object
+      properties:
+        gameId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string }
+    Player:
+      type: object
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+    PlayerPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Player' } }
+        nextCursor: { type: string, nullable: true }
