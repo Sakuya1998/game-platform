@@ -92,7 +92,8 @@ CREATE TABLE auth.player_sessions (
     rotated_from uuid,
     created_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id),
-    FOREIGN KEY (rotated_from) REFERENCES auth.player_sessions(id)
+    FOREIGN KEY (game_id, player_id, rotated_from) REFERENCES auth.player_sessions(game_id, player_id, id),
+    UNIQUE (game_id, player_id, id)
 );
 CREATE INDEX player_sessions_player_idx ON auth.player_sessions(game_id, player_id);
 CREATE INDEX player_sessions_expiry_idx ON auth.player_sessions(expires_at) WHERE revoked_at IS NULL;
@@ -155,7 +156,8 @@ CREATE TABLE game.config_versions (
     CHECK (payload IS NOT NULL OR object_key IS NOT NULL),
     FOREIGN KEY (game_id, config_id) REFERENCES game.configs(game_id, id),
     UNIQUE (game_id, config_id, version),
-    UNIQUE (game_id, id)
+    UNIQUE (game_id, id),
+    UNIQUE (game_id, id, config_id)
 );
 
 CREATE TABLE game.config_releases (
@@ -167,7 +169,7 @@ CREATE TABLE game.config_releases (
     released_by uuid,
     released_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (game_id, config_id) REFERENCES game.configs(game_id, id),
-    FOREIGN KEY (game_id, config_version_id) REFERENCES game.config_versions(game_id, id),
+    FOREIGN KEY (game_id, config_version_id, config_id) REFERENCES game.config_versions(game_id, id, config_id),
     UNIQUE (game_id, config_id, channel, released_at)
 );
 CREATE INDEX config_releases_latest_idx ON game.config_releases(game_id, config_id, channel, released_at DESC);
@@ -306,7 +308,8 @@ CREATE TABLE ads.sessions (
     created_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id),
     FOREIGN KEY (game_id, placement_id) REFERENCES ads.placements(game_id, id),
-    UNIQUE (game_id, id)
+    UNIQUE (game_id, id),
+    UNIQUE (game_id, id, player_id)
 );
 
 CREATE TABLE ads.reward_claims (
@@ -318,7 +321,7 @@ CREATE TABLE ads.reward_claims (
     status text NOT NULL CHECK (status IN ('granted','rejected','review')),
     idempotency_key text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (game_id, session_id) REFERENCES ads.sessions(game_id, id),
+    FOREIGN KEY (game_id, session_id, player_id) REFERENCES ads.sessions(game_id, id, player_id),
     FOREIGN KEY (game_id, player_id) REFERENCES player.players(game_id, id),
     UNIQUE (game_id, session_id),
     UNIQUE (game_id, idempotency_key)
