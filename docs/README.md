@@ -1,5 +1,11 @@
 # Architecture documentation
 
+## Overview
+
+| Document | Purpose |
+|---|---|
+| [Game Platform 技术设计与实施方案](game-platform-technical-design.md) | End-to-end architecture, domain boundaries, security, deployment, roadmap, and delivery plan |
+
 ## Normative documents
 
 | Document | Purpose |
