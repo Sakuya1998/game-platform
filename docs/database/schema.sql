@@ -1,20 +1,20 @@
--- Game Platform baseline PostgreSQL schema (design baseline v2.0, 2026-11-23)
--- Target: PostgreSQL 16+
+-- 游戏平台 PostgreSQL 基线结构（设计基线 v2.0，2026-11-23）
+-- 目标版本：PostgreSQL 16+
 --
--- This file is the reviewed design baseline for the table set in section 5.2 of
--- docs/game-platform-technical-design.md. It is NOT an applied migration and has not been
--- executed against a database yet. Task T03 splits it into ordered, immutable migrations
--- under /migrations (000001_create_schemas, 000002_create_platform, ...).
+-- 本文件是经评审的数据库设计基线，对应技术设计第 5.2 节中的数据表集合。
+-- 本文件不是已应用的迁移，尚未
+-- 在数据库中执行。T03 任务会将其拆分为有序、不可变的迁移文件
+-- 并置于 `/migrations` 下（000001_create_schemas、000002_create_platform 等）。
 --
--- Rules:
---   * Apply with a dedicated migration role. Runtime roles (game_api_runtime, gm_api_runtime,
---     game_worker_runtime) are never owners and never superusers.
---   * Every game-owned table carries game_id. Cross-table references inside a game use
---     composite foreign keys that include game_id, so a row cannot point across games.
---   * Money and quantities are integers in minor units. No floating point.
---   * All timestamps are timestamptz (stored in UTC).
---   * Naming deviations from the design document's logical field list are recorded in
---     docs/database/erd.md ("Deviations from the design document").
+-- 规则：
+--   * 使用专用迁移角色执行。运行时角色（game_api_runtime、gm_api_runtime、
+--     game_worker_runtime）绝不是对象所有者或超级用户。
+--   * 每张游戏归属表都包含 game_id。游戏内跨表引用使用包含 game_id 的
+--     复合外键，防止记录跨游戏引用。
+--   * 金额和数量均使用最小单位整数，不使用浮点数。
+--   * 所有时间戳均为 timestamptz（以 UTC 存储）。
+--   * 与设计文档逻辑字段列表不同的命名，记录在
+--     docs/database/erd.md（“与设计文档的差异”）中。
 
 BEGIN;
 
@@ -32,8 +32,8 @@ CREATE SCHEMA IF NOT EXISTS audit;
 CREATE SCHEMA IF NOT EXISTS analytics;
 CREATE SCHEMA IF NOT EXISTS system;
 
--- Shared guard for append-only tables (ledgers and audit logs).
--- Privileges (INSERT/SELECT only) are the first line of defence; this trigger is the second.
+-- 只追加数据表（流水和审计日志）的共用保护触发器。
+-- 权限限制（仅 INSERT/SELECT）是第一道防线；本触发器是第二道防线。
 CREATE FUNCTION system.reject_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -44,7 +44,7 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- A. platform — games and platform configuration
+-- A. platform — 游戏和平台配置
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE platform.games (
@@ -68,8 +68,8 @@ CREATE TABLE platform.game_platform_apps (
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (game_id, id),
     UNIQUE (game_id, platform, app_id),
-    -- A platform app belongs to exactly one game, so the server can resolve game_id from
-    -- (platform, app_id) at login instead of trusting a client-supplied game_id.
+    -- 一个平台应用只属于一款游戏，因此登录时服务端可根据
+    -- (platform, app_id) 解析 game_id，而不信任客户端传入的 game_id。
     UNIQUE (platform, app_id)
 );
 
@@ -81,8 +81,8 @@ CREATE TABLE platform.game_settings (
     PRIMARY KEY (game_id, setting_key)
 );
 
--- Per-environment descriptors of a game (endpoints, CDN base, test app bindings).
--- Player data of different environments still lives in separate databases.
+-- 游戏在各环境中的描述信息（端点、CDN 基础地址、测试应用绑定）。
+-- 不同环境的玩家数据仍存放于各自独立的数据库。
 CREATE TABLE platform.game_environments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     game_id uuid NOT NULL REFERENCES platform.games(id),
@@ -98,7 +98,7 @@ CREATE TABLE platform.game_environments (
 );
 
 -- ---------------------------------------------------------------------------
--- J. admin — GM identities and RBAC (separate security plane from players)
+-- J. admin — GM 身份与 RBAC（与玩家平面相互隔离）
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE admin.admin_users (
@@ -132,8 +132,8 @@ CREATE TABLE admin.permissions (
     description text NOT NULL
 );
 
--- Authorization is evaluated as (admin, permission, game scope).
--- Platform-wide scope is an explicit scope_type, never an implicit NULL.
+-- 授权依据为 (admin, permission, game scope)。
+-- 平台级范围通过 scope_type 明确表示，绝不隐式使用 NULL。
 CREATE TABLE admin.admin_user_roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     admin_id uuid NOT NULL REFERENCES admin.admin_users(id),
@@ -183,7 +183,7 @@ CREATE TABLE admin.admin_mfa (
 );
 
 -- ---------------------------------------------------------------------------
--- M. system — idempotency, outbox, background jobs, service identities
+-- M. system — 幂等、Outbox、后台任务、服务身份
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE system.idempotency_keys (
@@ -215,8 +215,8 @@ CREATE TABLE system.outbox_events (
 CREATE INDEX outbox_pending_idx ON system.outbox_events (next_attempt_at, occurred_at)
     WHERE published_at IS NULL;
 
--- PostgreSQL-backed job queue for game-worker. Claim with
--- SELECT ... FOR UPDATE SKIP LOCKED, then hold a lease refreshed by heartbeat.
+-- 基于 PostgreSQL 的 game-worker 任务队列。使用
+-- SELECT ... FOR UPDATE SKIP LOCKED 领取任务，再持有并通过心跳续期。
 CREATE TABLE system.background_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     game_id uuid REFERENCES platform.games(id),
@@ -256,9 +256,9 @@ CREATE TABLE system.service_identities (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- HMAC verification needs the signing secret, so a one-way hash is not sufficient for
--- 'hmac' credentials: the secret is kept in the secret manager and referenced by secret_ref.
--- credential_hash holds the SHA-256 certificate fingerprint for 'mtls' credentials.
+-- HMAC 验证需要签名密钥，因此对于
+-- 'hmac' 凭据，单向哈希并不足够：密钥保存在密钥管理器中，并通过 secret_ref 引用。
+-- 对于 'mtls' 凭据，credential_hash 保存证书的 SHA-256 指纹。
 CREATE TABLE system.service_credentials (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL REFERENCES system.service_identities(id),
@@ -285,7 +285,7 @@ CREATE TABLE system.service_game_grants (
 );
 
 -- ---------------------------------------------------------------------------
--- C. player — player subject, profile, save, bans
+-- C. player — 玩家主体、资料、存档、封禁
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE player.players (
@@ -311,8 +311,8 @@ CREATE TABLE player.player_profiles (
 );
 CREATE INDEX player_profiles_nickname_idx ON player.player_profiles (game_id, nickname);
 
--- Current save. Non-authoritative game state only: wallets, items and entitlements
--- live in their own tables and are never derived from save_data.
+-- 当前存档。仅保存非权威游戏状态；钱包、道具和权益
+-- 保存在各自的数据表中，绝不从 save_data 推导。
 CREATE TABLE player.player_saves (
     game_id uuid NOT NULL,
     player_id uuid NOT NULL,
@@ -364,7 +364,7 @@ CREATE INDEX player_bans_active_idx ON player.player_bans (game_id, player_id)
     WHERE revoked_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- B. auth — external identity mapping, player sessions, login records
+-- B. auth — 外部身份映射、玩家会话、登录记录
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE auth.player_identities (
@@ -422,7 +422,7 @@ CREATE INDEX login_records_player_idx ON auth.login_records (game_id, player_id,
 CREATE INDEX login_records_time_idx ON auth.login_records (game_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
--- D. game — configuration definitions, versions and releases
+-- D. game — 配置定义、版本和发布
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE game.game_configs (
@@ -439,8 +439,8 @@ CREATE TABLE game.game_configs (
     UNIQUE (game_id, config_key)
 );
 
--- A version is immutable once it leaves 'draft'. Large payloads go to object storage
--- (object_key); PostgreSQL keeps metadata and checksum.
+-- 版本离开 'draft' 状态后不可变。大型负载存入对象存储
+-- （object_key）；PostgreSQL 保存元数据和校验和。
 CREATE TABLE game.config_versions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     game_id uuid NOT NULL,
@@ -462,8 +462,8 @@ CREATE TABLE game.config_versions (
     UNIQUE (game_id, config_id, version)
 );
 
--- A release is an immutable publication event. Rollback is a new release whose items
--- point at older versions; nothing is overwritten.
+-- 发布记录是不可变的发布事件。回滚会创建新的发布记录，其发布项
+-- 指向较早版本；不会覆盖任何内容。
 CREATE TABLE game.config_releases (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     game_id uuid NOT NULL REFERENCES platform.games(id),
@@ -480,7 +480,7 @@ CREATE TABLE game.config_releases (
 );
 CREATE INDEX config_releases_game_idx ON game.config_releases (game_id, release_no DESC);
 
--- The active version of a config is the item of its latest release (highest release_no).
+-- 配置的生效版本是其最新发布记录（release_no 最高）中的发布项。
 CREATE TABLE game.config_release_items (
     game_id uuid NOT NULL,
     release_id uuid NOT NULL,
@@ -494,7 +494,7 @@ CREATE TABLE game.config_release_items (
 CREATE INDEX config_release_items_config_idx ON game.config_release_items (game_id, config_id);
 
 -- ---------------------------------------------------------------------------
--- E. gameplay — runs, one-time settlement, run events
+-- E. gameplay — 对局、单次结算、对局事件
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE gameplay.game_runs (
@@ -546,7 +546,7 @@ CREATE TABLE gameplay.run_events (
 CREATE INDEX run_events_run_idx ON gameplay.run_events (game_id, run_id, created_at);
 
 -- ---------------------------------------------------------------------------
--- F. economy — currencies, wallets, items and their immutable ledgers
+-- F. economy — 货币、钱包、道具及其不可变流水
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE economy.currency_definitions (
@@ -559,9 +559,9 @@ CREATE TABLE economy.currency_definitions (
     PRIMARY KEY (game_id, currency_code)
 );
 
--- Balance is a projection of the ledger and is only changed in the same transaction that
--- inserts a wallet_transactions row. V1 forbids negative balances for every currency; a
--- currency that must go negative needs an ADR amendment and a migration of this CHECK.
+-- 余额是流水的投影；仅在写入 wallet_transactions 记录的同一事务中
+-- 更新余额。V1 禁止任何货币余额为负；若某种货币必须允许负余额，需修订 ADR
+-- 并通过迁移修改此 CHECK 约束。
 CREATE TABLE economy.wallets (
     game_id uuid NOT NULL,
     player_id uuid NOT NULL,
@@ -594,7 +594,7 @@ CREATE TABLE economy.wallet_transactions (
     FOREIGN KEY (game_id, player_id, currency_code)
         REFERENCES economy.wallets (game_id, player_id, currency_code),
     UNIQUE (game_id, id),
-    -- One business source can change one player's balance of one currency once per action.
+    -- 每项操作中，同一业务来源只能变更同一玩家的一种货币余额一次。
     UNIQUE (game_id, player_id, currency_code, source_type, source_id, transaction_type)
 );
 CREATE INDEX wallet_transactions_player_idx
@@ -660,8 +660,8 @@ CREATE TRIGGER item_transactions_append_only
     FOR EACH ROW EXECUTE FUNCTION system.reject_mutation();
 
 -- ---------------------------------------------------------------------------
--- G. ads — placements, sessions, reward claims, daily limits
--- The client completion callback is evidence, not trusted proof.
+-- G. ads — 广告位、会话、奖励领取、每日限额
+-- 客户端完成回调是证据，不是可信证明。
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE ads.ad_placements (
@@ -725,7 +725,7 @@ CREATE TABLE ads.ad_daily_limits (
 );
 
 -- ---------------------------------------------------------------------------
--- H. operation — announcements, mail, activities, batch reward jobs
+-- H. operation — 公告、邮件、活动、批量奖励任务
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE operation.announcements (
@@ -826,8 +826,8 @@ CREATE TABLE operation.activity_claims (
     UNIQUE (game_id, activity_id, player_id, reward_id)
 );
 
--- Business-level record of a batch grant / mass mail; execution is carried by
--- system.background_jobs and performed by game-worker, never inside a GM HTTP request.
+-- 批量发放或群发邮件的业务记录；任务由 system.background_jobs
+-- 承载并由 game-worker 执行，绝不在 GM HTTP 请求中处理。
 CREATE TABLE operation.reward_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     game_id uuid NOT NULL REFERENCES platform.games(id),
@@ -852,7 +852,7 @@ CREATE TABLE operation.reward_jobs (
 CREATE INDEX reward_jobs_game_idx ON operation.reward_jobs (game_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
--- I. ranking — PostgreSQL is authoritative; Redis only accelerates reads
+-- I. ranking — PostgreSQL 为权威数据源；Redis 仅用于加速读取
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE ranking.leaderboards (
@@ -896,7 +896,7 @@ CREATE TABLE ranking.leaderboard_snapshots (
 );
 
 -- ---------------------------------------------------------------------------
--- K. audit — append-only audit trails
+-- K. audit — 只追加的审计记录
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE audit.admin_audit_logs (
@@ -942,7 +942,7 @@ CREATE TRIGGER service_audit_logs_append_only
     FOR EACH ROW EXECUTE FUNCTION system.reject_mutation();
 
 -- ---------------------------------------------------------------------------
--- L. analytics — events and daily aggregates (reporting data, not authority)
+-- L. analytics — 事件和每日聚合数据（仅用于报告，不具权威性）
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE analytics.game_events (
@@ -979,9 +979,9 @@ CREATE TABLE analytics.daily_game_stats (
 );
 
 -- ---------------------------------------------------------------------------
--- Baseline RBAC seed: permission codes and system roles.
--- Codes beyond the examples in the design document are marked "(extension)"; the
--- role -> permission mapping is deferred to docs/security/rbac-matrix.md.
+-- RBAC 基线种子数据：权限代码和系统角色。
+-- 超出设计文档示例的权限代码标记为“（扩展）”；
+-- 角色到权限的映射待定，详见 docs/security/rbac-matrix.md。
 -- ---------------------------------------------------------------------------
 
 INSERT INTO admin.permissions (code, description) VALUES
@@ -1020,15 +1020,15 @@ INSERT INTO admin.roles (code, name, description, is_system) VALUES
 
 COMMIT;
 
--- Production hardening checklist (separate migrations / runbook, task T03 and T21):
--- 1. Create a NOLOGIN owner role plus distinct LOGIN roles game_api_runtime, gm_api_runtime,
---    game_worker_runtime; create game_migrator for deployments only.
--- 2. REVOKE ALL FROM PUBLIC; grant schema/table privileges explicitly per runtime role.
---    game_api_runtime gets no privileges on the admin schema; gm_api_runtime gets no direct
---    UPDATE on economy.wallets outside the ledger write path chosen in ADR-0007.
--- 3. Audit and ledger tables: runtime roles get INSERT/SELECT only (no UPDATE/DELETE/TRUNCATE).
--- 4. Add RLS only with a documented transaction-local game scope and a tested role model;
---    test with real LOGIN roles, not the owner.
--- 5. Keep migration credentials out of application deployments.
--- 6. Add partitioning/retention for analytics.game_events, auth.login_records, audit logs and
---    ledgers once volume and retention requirements are measured.
+-- 生产加固检查清单（通过独立迁移/运维手册完成，任务 T03 和 T21）：
+-- 1. 创建 NOLOGIN 所有者角色，并分别创建 LOGIN 角色 game_api_runtime、gm_api_runtime、
+--    game_worker_runtime；另创建仅供部署使用的 game_migrator。
+-- 2. 对 PUBLIC 执行 REVOKE ALL；按运行时角色显式授予 Schema/数据表权限。
+--    game_api_runtime 不得访问 admin Schema；gm_api_runtime 不得绕过 ADR-0007 选定的钱包流水写入路径
+--    直接 UPDATE economy.wallets。
+-- 3. 审计和流水表：运行时角色仅授予 INSERT/SELECT（不得 UPDATE/DELETE/TRUNCATE）。
+-- 4. 仅在记录事务级游戏范围并测试角色模型后才启用 RLS；
+--    使用真实 LOGIN 角色测试，不使用所有者角色。
+-- 5. 迁移凭据不得进入应用部署环境。
+-- 6. 在测得数据量并明确保留要求后，为 analytics.game_events、auth.login_records、审计日志和
+--    流水增加分区和保留策略。

@@ -1,194 +1,192 @@
-# Implementation roadmap
+﻿# 实施路线图
 
-Baseline v2.0 (2026-11-23). Source: sections 12 and 13 of the [technical design](../game-platform-technical-design.md).
+基线 v2.0（2026-11-23）。来源：[技术设计](../game-platform-technical-design.md)第 12 和 13 节。
 
-The first release targets WeChat Mini Games. The initial engineering estimate for V1 is 10–12 weeks in total; the actual duration depends on team size, client complexity and the depth of the operations features. Per-phase durations are not fixed in this baseline.
+首个版本面向微信小游戏。V1 初步工程估算为 10–12 周；实际时长取决于团队规模、客户端复杂度和运营功能深度。本基线不固定各阶段所需时长。
 
-The gates below are carried over from baseline 1.0 and adapted to the new phase layout. They are acceptance conditions, not statements about work already done: no code exists in this repository yet.
+以下阶段门禁沿用并调整自 1.0 基线。这些是验收条件，并非已完成工作的声明：本仓库目前尚无代码。
 
-## Phase 0 — Architecture and engineering baseline
+## 阶段 0 — 架构与工程基线
 
-- [ ] Freeze ADR decisions (the nine ADRs under `docs/adr/` are written and await review).
-- [ ] Initialize the monorepo and the single Go module.
-- [ ] Write `AGENTS.md`.
-- [ ] Gin server baseline for `game-api` and `gm-api`.
-- [ ] Initialize the Vue project for `gm-web`.
-- [ ] Docker Compose.
-- [ ] CI/CD: Go tests, formatting, static analysis, OpenAPI lint, migration validation.
+- [ ] 确认 ADR 决策（`docs/adr/` 下的九篇 ADR 已编写，待评审）。
+- [ ] 初始化单体仓库和单一 Go 模块。
+- [ ] 编写 `AGENTS.md`。
+- [ ] 为 `game-api` 和 `gm-api` 搭建 Gin 服务基线。
+- [ ] 初始化 `gm-web` 的 Vue 项目。
+- [ ] 配置 Docker Compose。
+- [ ] 配置 CI/CD：Go 测试、格式化、静态分析、OpenAPI lint、迁移校验。
 
-**Gate:** `game-api`, `gm-api` and `game-worker` build independently; no entry imports another entry's transport package; `gamecore` does not import Gin.
+**门禁：** `game-api`、`gm-api` 和 `game-worker` 可独立构建；任何入口都不导入其他入口的传输层包；`gamecore` 不导入 Gin。
 
-## Phase 1 — Database and platform management
+## 阶段 1 — 数据库与平台管理
 
-- [ ] PostgreSQL schemas.
-- [ ] Convert `docs/database/schema.sql` into ordered, immutable migrations.
-- [ ] Game management.
-- [ ] Platform app configuration.
-- [ ] Repository foundation.
-- [ ] Database roles and privilege design: separate runtime roles for `game-api`, `gm-api`, `game-worker`, plus a migration role.
+- [ ] 创建 PostgreSQL Schema。
+- [ ] 将 `docs/database/schema.sql` 转换为有序、不可变的迁移。
+- [ ] 实现游戏管理。
+- [ ] 配置平台应用。
+- [ ] 搭建 Repository 基础设施。
+- [ ] 设计数据库角色和权限：为 `game-api`、`gm-api`、`game-worker` 分别设置运行时角色，并单独设置迁移角色。
 
-**Gate:** migrations apply to an empty database; cross-game foreign-key tests reject invalid references; runtime roles are neither owners nor superusers.
+**门禁：** 迁移可应用于空数据库；跨游戏外键测试会拒绝无效引用；运行时角色既非对象所有者，也非超级用户。
 
-## Phase 2 — Player authentication and player module
+## 阶段 2 — 玩家认证与玩家模块
 
-- [ ] WeChat login.
-- [ ] Player identity mapping.
-- [ ] Access token and refresh token (hashed, rotated, revocable).
-- [ ] Player profile.
-- [ ] Player bans.
+- [ ] 实现微信登录。
+- [ ] 实现玩家身份映射。
+- [ ] 实现 access token 和 refresh token（哈希存储、轮换、可撤销）。
+- [ ] 实现玩家资料。
+- [ ] 实现玩家封禁。
 
-**Gate:** the same WeChat identity in two games yields two independent player IDs; a banned player cannot obtain or refresh tokens; secrets, codes and `session_key` appear in no log or response.
+**门禁：** 同一微信身份在两款游戏中生成两个独立玩家 ID；被封禁玩家无法获取或刷新令牌；日志和响应中均不出现密钥、code 或 `session_key`。
 
-## Phase 3 — Configuration and saves
+## 阶段 3 — 配置与存档
 
-- [ ] Config versions.
-- [ ] Config publishing and rollback.
-- [ ] S3 / CDN storage for large config payloads.
-- [ ] Save versions.
-- [ ] Optimistic locking.
-- [ ] Save snapshots.
+- [ ] 实现配置版本。
+- [ ] 实现配置发布和回滚。
+- [ ] 使用 S3 / CDN 存储大型配置负载。
+- [ ] 实现存档版本。
+- [ ] 实现乐观锁。
+- [ ] 实现存档快照。
 
-**Gate:** a stale save write returns 412 `SAVE_VERSION_CONFLICT`; a published config version is immutable; rollback creates a new release and is audited.
+**门禁：** 过期存档写入返回 412 `SAVE_VERSION_CONFLICT`；已发布配置版本不可变；回滚会创建新发布记录并写入审计。
 
-## Phase 4 — Gameplay and economy
+## 阶段 4 — 玩法与经济系统
 
-- [ ] Run management.
-- [ ] Settlement validation.
-- [ ] Wallets.
-- [ ] Asset ledgers.
-- [ ] Item inventory.
-- [ ] Idempotency.
+- [ ] 实现对局管理。
+- [ ] 实现结算校验。
+- [ ] 实现钱包。
+- [ ] 实现资产流水。
+- [ ] 实现道具背包。
+- [ ] 实现幂等性。
 
-**Gate:** concurrent duplicate settlement and grant tests produce exactly one durable grant; balances never go negative; every balance change has a ledger row in the same transaction.
+**门禁：** 并发重复结算和重复发放测试最终只产生一笔持久化奖励；余额永不为负；每次余额变更都在同一事务中写入流水。
 
-## Phase 5 — Ads and operations
+## 阶段 5 — 广告与运营
 
-- [ ] Ad sessions.
-- [ ] Ad rewards.
-- [ ] Mail.
-- [ ] Announcements.
-- [ ] Activities.
-- [ ] Leaderboards.
+- [ ] 实现广告会话。
+- [ ] 实现广告奖励。
+- [ ] 实现邮件。
+- [ ] 实现公告。
+- [ ] 实现活动。
+- [ ] 实现排行榜。
 
-**Gate:** replayed ad claims and duplicate mail or activity claims cannot duplicate rewards; daily ad limits hold under concurrency.
+**门禁：** 重放广告领取请求以及重复领取邮件或活动都不会导致重复奖励；并发情况下仍能遵守广告每日限额。
 
-## Phase 6 — GM platform
+## 阶段 6 — GM 平台
 
-- [ ] GM login and MFA.
-- [ ] RBAC with permission codes and game scope.
-- [ ] Player management.
-- [ ] Economy management.
-- [ ] Config management.
-- [ ] Mail and activity management.
-- [ ] Audit centre.
+- [ ] 实现 GM 登录和 MFA。
+- [ ] 实现基于权限代码和游戏范围的 RBAC。
+- [ ] 实现玩家管理。
+- [ ] 实现经济管理。
+- [ ] 实现配置管理。
+- [ ] 实现邮件和活动管理。
+- [ ] 实现审计中心。
 
-**Gate:** tests show a GM cannot act outside the assigned game scope or without the permission code; every privileged mutation has an audit row; `gm-web` talks to `gm-api` only.
+**门禁：** 测试证明 GM 无法越权操作未获授权的游戏，也无法在没有相应权限代码时操作；每项特权变更均有审计记录；`gm-web` 只调用 `gm-api`。
 
-## Phase 7 — Worker and analytics
+## 阶段 7 — Worker 与分析
 
-- [ ] Outbox.
-- [ ] Background jobs.
-- [ ] `game-worker`.
-- [ ] Batch mail and batch rewards.
-- [ ] Event upload.
-- [ ] Statistics jobs.
+- [ ] 实现 Outbox。
+- [ ] 实现后台任务。
+- [ ] 实现 `game-worker`。
+- [ ] 实现批量邮件和批量奖励。
+- [ ] 实现事件上传。
+- [ ] 实现统计任务。
 
-**Gate:** a job killed mid-run is reclaimed after its lease expires and completes without duplicating grants; mass mail and batch rewards never run inside a GM HTTP request.
+**门禁：** 任务中途终止后，会在租约过期时重新领取并最终完成，且不重复发奖；群发邮件和批量奖励绝不在 GM HTTP 请求中执行。
 
-## Phase 8 — Deployment and production acceptance
+## 阶段 8 — 部署与生产验收
 
-- [ ] Docker images.
-- [ ] Independent service deployment.
-- [ ] Backup and restore.
-- [ ] Security testing.
-- [ ] Load testing.
-- [ ] WeChat Mini Game integration testing.
+- [ ] 构建 Docker 镜像。
+- [ ] 支持服务独立部署。
+- [ ] 完成备份与恢复。
+- [ ] 执行安全测试。
+- [ ] 执行负载测试。
+- [ ] 完成微信小游戏集成测试。
 
-**Release gate:** all critical security and integrity tests pass; backup restore is rehearsed; `internal-api` is not reachable from any public ingress; the open questions in `docs/architecture/decisions.md` are answered and documented.
+**发布门禁：** 所有关键安全与数据完整性测试通过；完成备份恢复演练；公网入口无法访问 `internal-api`；`docs/architecture/decisions.md` 中的待决问题均有答案并记录。
 
-## Codex task breakdown
+## Codex 任务分解
 
-One task per Codex run. The phase column is a suggested mapping added in this roadmap; the design document defines the tasks and the phases separately.
+每次 Codex 运行处理一个任务。阶段列是本路线图提供的建议映射；设计文档分别定义任务和阶段。
 
-| Task | Content | Acceptance artifact | Phase |
+| 任务 | 内容 | 验收产物 | 阶段 |
 |---|---|---|---|
-| T00 | Architecture ADRs | Architecture decision documents | P0 |
-| T01 | Monorepo initialization | Directories, Go module, `AGENTS.md` | P0 |
-| T02 | API server baseline | Two Gin servers: `game-api`, `gm-api` | P0 |
-| T03 | PostgreSQL foundation | Schemas, migrations, database roles | P1 |
-| T04 | Infrastructure | Redis, S3, configuration, logging | P0–P1 |
-| T05 | Game Core foundation | Domain, application, repository | P1 |
-| T06 | Platform management | Games, platform apps | P1 |
-| T07 | Player authentication | WeChat login, identity mapping, tokens | P2 |
-| T08 | Player management | Profile, ban, save | P2–P3 |
-| T09 | Config centre | Config, version, release | P3 |
-| T10 | Gameplay | Game runs, settlement | P4 |
-| T11 | Economy | Wallet, transactions, items | P4 |
-| T12 | Ads | Placement, session, claim | P5 |
-| T13 | Operation | Mail, announcement, activity | P5 |
-| T14 | Ranking | Leaderboard | P5 |
-| T15 | GM auth / RBAC | Admin, role, permission, MFA | P6 |
-| T16 | GM Web | Management console | P6 |
-| T17 | Audit | GM and internal operation audit | P6 |
-| T18 | Worker | Outbox, job, worker | P7 |
-| T19 | API contracts | Three OpenAPI documents, SDK | P0 onward |
-| T20 | Deployment | Compose, CI/CD, monitoring | P8 |
-| T21 | Security | Permission, idempotency, isolation and audit tests | P8 |
-| T22 | Acceptance | Integration, load testing, release acceptance | P8 |
+| T00 | 架构 ADR | 架构决策文档 | P0 |
+| T01 | 初始化单体仓库 | 目录、Go 模块、`AGENTS.md` | P0 |
+| T02 | API 服务基线 | 两个 Gin 服务：`game-api`、`gm-api` | P0 |
+| T03 | PostgreSQL 基础 | Schema、迁移、数据库角色 | P1 |
+| T04 | 基础设施 | Redis、S3、配置、日志 | P0–P1 |
+| T05 | Game Core 基础 | 领域、应用层、Repository | P1 |
+| T06 | 平台管理 | 游戏、平台应用 | P1 |
+| T07 | 玩家认证 | 微信登录、身份映射、令牌 | P2 |
+| T08 | 玩家管理 | 资料、封禁、存档 | P2–P3 |
+| T09 | 配置中心 | 配置、版本、发布 | P3 |
+| T10 | 玩法 | 游戏对局、结算 | P4 |
+| T11 | 经济系统 | 钱包、流水、道具 | P4 |
+| T12 | 广告 | 广告位、会话、领取 | P5 |
+| T13 | 运营 | 邮件、公告、活动 | P5 |
+| T14 | 排行榜 | 排行榜 | P5 |
+| T15 | GM 认证 / RBAC | 管理员、角色、权限、MFA | P6 |
+| T16 | GM Web | 管理控制台 | P6 |
+| T17 | 审计 | GM 和内部操作审计 | P6 |
+| T18 | Worker | Outbox、任务、Worker | P7 |
+| T19 | API 契约 | 三份 OpenAPI 文档、SDK | 从 P0 起持续进行 |
+| T20 | 部署 | Compose、CI/CD、监控 | P8 |
+| T21 | 安全 | 权限、幂等、隔离和审计测试 | P8 |
+| T22 | 验收 | 集成测试、负载测试、发布验收 | P8 |
 
-`internal-api` in T02 means only the reserved directory, the service-auth abstraction and the OpenAPI contract. Deploying the service belongs to a later version and must not block `game-api` and `gm-api`.
+T02 中的 `internal-api` 仅指预留目录、服务认证抽象和 OpenAPI 契约。该服务的实际部署属于后续版本，不得阻塞 `game-api` 和 `gm-api`。
 
-## Requirements for every Codex task
+## 每项 Codex 任务必须报告
 
-Each task reports:
+1. 本次完成的目标。
+2. 变更文件列表。
+3. 数据库迁移变更。
+4. API / OpenAPI 变更。
+5. 权限与安全影响。
+6. 单元和集成测试。
+7. 实际运行的测试命令及结果。
+8. 尚未完成的事项。
+9. 风险和后续依赖。
+10. 建议的 Git 提交说明。
 
-1. The goal completed in this run.
-2. The list of changed files.
-3. Database migration changes.
-4. API / OpenAPI changes.
-5. Permission and security impact.
-6. Unit and integration tests.
-7. The test commands actually run and their results.
-8. Unfinished items.
-9. Risks and follow-up dependencies.
-10. A recommended Git commit message.
+禁止事项：
 
-Not allowed:
+- 未经评审更改已批准的 ADR。
+- 用 TODO 代替核心业务逻辑。
+- 删除断言以使测试通过。
+- 编造测试结果。
+- 将玩家 API 和 GM API 合并为同一个安全入口。
+- 在 Handler 中实现业务逻辑。
+- 允许客户端决定权威资产。
+- 用 Redis 锁取代数据库事务和唯一约束。
 
-- Changing an approved ADR without review.
-- Replacing core business logic with a TODO.
-- Deleting assertions to make tests pass.
-- Fabricating test results.
-- Merging the player API and the GM API into one security entry.
-- Implementing business logic in handlers.
-- Letting the client decide authoritative assets.
-- Using a Redis lock in place of a database transaction and unique constraint.
+## V1 范围
 
-## V1 scope
-
-| Capability | V1 |
+| 能力 | V1 要求 |
 |---|---|
-| Multi-game management | Required |
-| WeChat login | Required |
-| Per-game player accounts | Required |
-| Player profile | Required |
-| Saves with version control | Required |
-| Config version management | Required |
-| Runs and settlement | Required |
-| Wallets and asset ledgers | Required |
-| Item inventory | Required |
-| Ad rewards | Required |
-| GM platform | Required |
-| RBAC | Required |
-| Operation audit | Required |
-| Mail and announcements | Required |
-| Activity management | Required |
-| Leaderboards | Basic version required |
-| Worker | Enabled with asynchronous work |
-| Internal API | Reserved, deployed on demand |
-| Multi-platform adapter | Interface reserved |
-| Payments | Not in scope |
-| Real-time combat server | Not in scope |
-| Kafka / RocketMQ | Not in scope |
-| Kubernetes | Not in scope |
-| Microservice split | Not in scope |
+| 多游戏管理 | 必须 |
+| 微信登录 | 必须 |
+| 按游戏隔离的玩家账号 | 必须 |
+| 玩家资料 | 必须 |
+| 带版本控制的存档 | 必须 |
+| 配置版本管理 | 必须 |
+| 对局与结算 | 必须 |
+| 钱包和资产流水 | 必须 |
+| 道具背包 | 必须 |
+| 广告奖励 | 必须 |
+| GM 平台 | 必须 |
+| RBAC | 必须 |
+| 运营审计 | 必须 |
+| 邮件和公告 | 必须 |
+| 活动管理 | 必须 |
+| 排行榜 | 必须提供基础版本 |
+| Worker | 启用异步任务 |
+| 内部 API | 预留；按需部署 |
+| 多平台适配器 | 预留接口 |
+| 支付 | 不在范围内 |
+| 实时战斗服务器 | 不在范围内 |
+| Kafka / RocketMQ | 不在范围内 |
+| Kubernetes | 不在范围内 |
+| 微服务拆分 | 不在范围内 |

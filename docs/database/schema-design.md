@@ -1,164 +1,164 @@
-# Schema design
+﻿# Schema 设计说明
 
-- **Status:** Draft for review (2026-11-23)
-- **Elaborates:** [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md)
-- **Source:** section 5 of the [technical design](../game-platform-technical-design.md); executable baseline in [schema.sql](schema.sql)
+- **状态：** 评审草案（2026-11-23）
+- **细化：** [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md)
+- **来源：** [技术设计](../game-platform-technical-design.md)第 5 节；可执行基线见[数据库结构](schema.sql)
 
-`schema.sql` is the source of truth for names and types. This document explains why the tables look the way they do. Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+`schema.sql` 是表名和类型的事实来源。本文解释各表的设计原因。标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. Layout
+## 1. 布局
 
-One database, `game_platform`, with 13 schemas and 57 tables. There is no database per game; games are separated by `game_id` ([game-isolation.md](../architecture/game-isolation.md)).
+单一数据库 `game_platform`，包含 13 个 Schema、57 张表。不为每款游戏单独建库；各游戏通过 `game_id` 隔离（见[游戏隔离](../architecture/game-isolation.md)）。
 
-| Schema | Tables | Owns |
-|---|---|---|
-| `platform` | 4 | Games, platform apps, settings, environments |
-| `auth` | 3 | External identities, player sessions, login records |
-| `player` | 5 | Player subject, profile, save, snapshots, bans |
-| `game` | 4 | Config definitions, versions, releases, release items |
-| `gameplay` | 3 | Runs, settlements, run events |
-| `economy` | 6 | Currency and item definitions, wallets, inventory, two ledgers |
-| `ads` | 4 | Placements, sessions, claims, daily limits |
-| `operation` | 7 | Announcements, mail, activities, batch reward jobs |
-| `ranking` | 3 | Leaderboards, entries, snapshots |
-| `admin` | 7 | Administrators, roles, permissions, sessions, MFA |
-| `audit` | 2 | GM audit log, service audit log |
-| `analytics` | 3 | Events, daily aggregates |
-| `system` | 6 | Idempotency, outbox, jobs, service identities |
+| Schema | 表数 | 职责 |
+|---|---:|---|
+| `platform` | 4 | 游戏、平台应用、设置、环境 |
+| `auth` | 3 | 外部身份、玩家会话、登录记录 |
+| `player` | 5 | 玩家主体、资料、存档、快照、封禁 |
+| `game` | 4 | 配置定义、版本、发布记录、发布项 |
+| `gameplay` | 3 | 对局、结算、对局事件 |
+| `economy` | 6 | 货币和道具定义、钱包、背包、两类流水 |
+| `ads` | 4 | 广告位、会话、领取、每日限额 |
+| `operation` | 7 | 公告、邮件、活动、批量奖励任务 |
+| `ranking` | 3 | 排行榜、条目、快照 |
+| `admin` | 7 | 管理员、角色、权限、会话、MFA |
+| `audit` | 2 | GM 审计日志、服务审计日志 |
+| `analytics` | 3 | 事件、每日聚合数据 |
+| `system` | 6 | 幂等、Outbox、任务、服务身份 |
 
-## 2. Conventions
+## 2. 约定
 
-| Topic | Rule |
+| 主题 | 规则 |
 |---|---|
-| Primary keys | `uuid`, `gen_random_uuid()` default. Tables whose natural key is the identity use that key instead (`wallets`, `player_items`, `game_settings`, daily stats). |
-| Game scope | Game-owned tables have `game_id uuid NOT NULL`. A referenced parent exposes `UNIQUE (game_id, id)`; children reference it with a composite foreign key. |
-| Time | `timestamptz` everywhere, stored in UTC. `created_at` on every table, `updated_at` where rows change. |
-| Money and counts | `bigint` in minor units. No `numeric`, no floating point. |
-| Enumerations | `text` with a `CHECK` list, not PostgreSQL `ENUM`, so a value can be added with an ordinary migration. |
-| Free-form data | `jsonb`, only where the structure belongs to a game or to a rule engine (section 4). |
-| Secrets | Never stored. Columns hold references (`credential_ref`, `secret_ref`) or one-way hashes (`refresh_token_hash`). The one encrypted column is `admin_mfa.secret_encrypted`. |
-| Deletion | Business rows are not hard-deleted. Status columns and `deleted_at` / `revoked_at` mark the end of life. Cleanup jobs delete only expired technical rows. |
-| Naming | `snake_case`; tables plural; foreign keys named after the referenced entity (`player_id`, `board_id`); no reserved-word column names. |
-| Actor columns | Where a row can be written by more than one kind of caller: `actor_type` / `created_by_type` in (`player`, `admin`, `service`, `system`) plus a text ID. |
+| 主键 | 使用 `uuid`，默认值为 `gen_random_uuid()`。自然键本身就是身份的数据表（`wallets`、`player_items`、`game_settings`、每日统计）直接使用自然键 |
+| 游戏范围 | 游戏归属表包含 `game_id uuid NOT NULL`。父表提供 `UNIQUE (game_id, id)`；子表通过复合外键引用 |
+| 时间 | 统一使用 `timestamptz`，以 UTC 存储。每张表都有 `created_at`；可变表还包含 `updated_at` |
+| 金额和数量 | 使用最小单位的 `bigint`；不使用 `numeric` 或浮点数 |
+| 枚举 | 使用带 `CHECK` 列表的 `text`，而非 PostgreSQL `ENUM`，以便通过普通迁移新增值 |
+| 自由格式数据 | 仅当结构属于具体游戏或规则引擎时使用 `jsonb`（见第 4 节） |
+| 密钥 | 不直接存储。列中保存引用（`credential_ref`、`secret_ref`）或单向哈希（`refresh_token_hash`）。唯一加密列为 `admin_mfa.secret_encrypted` |
+| 删除 | 业务记录不硬删除；通过状态列和 `deleted_at` / `revoked_at` 标记生命周期结束。清理任务只删除过期的技术性记录 |
+| 命名 | 使用 `snake_case`；表名采用复数；外键按被引用实体命名（`player_id`、`board_id`）；列名不得使用保留字 |
+| Actor 列 | 若一条记录可能由多种调用方写入，则包含 `actor_type` / `created_by_type`（取值为 `player`、`admin`、`service`、`system`）和文本类型的 ID |
 
-## 3. Schema notes
+## 3. 各 Schema 说明
 
 ### platform
 
-`games.code` is a short stable slug for people and tooling; `games.id` is the key everything else references. A platform app belongs to exactly one game: `UNIQUE (platform, app_id)` is what lets login resolve the game without trusting the client. `game_platform_apps.credential_ref` points into the secret store.
+`games.code` 是供人员和工具使用的简短稳定标识；`games.id` 是其他所有数据引用的键。一个平台应用只能属于一款游戏：`UNIQUE (platform, app_id)` 使登录时可以在不信任客户端的情况下解析游戏。`game_platform_apps.credential_ref` 指向密钥库中的凭据。
 
-`game_environments` describes a game's endpoints per environment. It does not partition player data; environments use separate databases.
+`game_environments` 描述一款游戏在各环境中的端点。它不用于分区玩家数据；不同环境使用不同数据库。
 
-### auth and player
+### auth 和 player
 
-`player.players` is the subject. Identities (`auth.player_identities`) attach external accounts to it; a player may have several inside one game. `unionid` is stored and has no constraint, because it must never join players across games.
+`player.players` 是玩家主体。外部账号身份保存在 `auth.player_identities` 并关联到玩家；同一游戏中的玩家可绑定多个身份。会保存 `unionid`，但不为其添加约束，因为绝不能据此跨游戏合并玩家。
 
-Profile, save, snapshots and bans are separate tables so that each has its own write path and privileges:
+玩家资料、存档、快照和封禁分表保存，使每类数据拥有独立写入路径和权限：
 
-| Table | Written by |
+| 表 | 写入方 |
 |---|---|
-| `player_profiles` | The player |
-| `player_saves` | The player (optimistic lock); GM restore |
-| `player_save_snapshots` | Worker (scheduled); `gm-api` (before restore) |
-| `player_bans` | `gm-api` only |
+| `player_profiles` | 玩家 |
+| `player_saves` | 玩家（乐观锁）；GM 恢复操作 |
+| `player_save_snapshots` | Worker（定时）；`gm-api`（恢复前） |
+| `player_bans` | 仅 `gm-api` |
 
-A ban is a row with its own life: start, optional expiry, revocation. `players.status = 'banned'` is the fast check; `player_bans` is the history and the reason.
+封禁记录具有独立生命周期：开始时间、可选的过期时间和撤销时间。`players.status = 'banned'` 用于快速检查；`player_bans` 保存历史和原因。
 
-`auth.login_records.player_id` is nullable because a login can fail before a player is known.
+登录可能在识别玩家前失败，因此 `auth.login_records.player_id` 允许为空。
 
 ### game
 
 ```text
-game_configs (key)
-  └─ config_versions (immutable once validated; content inline or in object storage)
-config_releases (immutable publication event, ordered by release_no)
-  └─ config_release_items (which version of which config this release makes active)
+game_configs（配置键）
+  └─ config_versions（通过校验后不可变；内容内嵌或存于对象存储）
+config_releases（不可变的发布事件，按 release_no 排序）
+  └─ config_release_items（此发布启用的各配置版本）
 ```
 
-A version is never overwritten. Publishing creates a release. Rolling back creates another release whose items point at older versions and whose `rollback_of_release_id` names the release being undone. The active version of a config is the item in the release with the highest `release_no` that contains that config.
+版本绝不覆盖。发布时创建一条发布记录；回滚时创建另一条发布记录，其发布项指向较早版本，并通过 `rollback_of_release_id` 指明被撤销的发布。某配置当前生效的版本，是包含该配置且 `release_no` 最高的发布项。
 
-`release_no` is an identity column because timestamps can tie and a release order must be total.
+`release_no` 使用 identity 列，因为时间戳可能相同，而发布顺序必须明确且唯一。
 
 ### gameplay
 
-`game_runs.id` is generated by the server and is the handle the client settles against. The run stores what the server needs to judge the result later: level, difficulty, rule version and a server-side `run_context`.
+`game_runs.id` 由服务端生成，客户端通过它提交结算。对局记录保存服务端稍后校验结果所需的信息：关卡、难度、规则版本和服务端 `run_context`。
 
-`run_settlements` stores the client's claim (`result`) next to the server's decision (`validation_status`, `rewards`). `UNIQUE (game_id, run_id)` makes a second settlement impossible.
+`run_settlements` 并列保存客户端声明（`result`）与服务端判定（`validation_status`、`rewards`）。`UNIQUE (game_id, run_id)` 防止重复结算。
 
-`run_events` holds notable events of a run, including risk signals.
+`run_events` 保存对局的重要事件，包括风险信号。
 
 ### economy
 
-See [economy-design.md](../architecture/economy-design.md). The points that shape the tables:
+详见[经济系统设计](../architecture/economy-design.md)。表结构遵循以下原则：
 
-- `wallets` has a natural composite primary key; there is one row per player and currency.
-- Ledger rows store a positive `amount` and a `direction`, plus `balance_after`, so each row can be checked on its own.
-- Ledger rows reference the wallet or inventory row, which guarantees the projection exists.
-- Both ledgers are append-only by trigger.
+- `wallets` 使用自然复合主键，每位玩家的每种货币各有一行。
+- 流水保存正数 `amount`、`direction` 和 `balance_after`，每条记录均可独立校验。
+- 流水引用钱包或背包记录，确保投影记录存在。
+- 两种流水表都通过触发器实现只追加。
 
 ### ads
 
-`ad_sessions` is the server's record that an ad view was started; `ad_reward_claims` is the decision. `ad_daily_limits` is a counter table keyed by player, placement and day, updated in the claim transaction so the limit holds under concurrency. `limit_date` uses the game's reset timezone, which is a game setting.
+`ad_sessions` 记录服务端确认已开始的广告观看；`ad_reward_claims` 记录发放奖励的决定。`ad_daily_limits` 是按玩家、广告位和日期设置的计数表，并在领取事务内更新，以保证并发情况下仍遵守限额。`limit_date` 使用游戏设置的每日重置时区。
 
 ### operation
 
-Mail is split into content (`mail_messages`), attachments (`mail_attachments`) and per-player delivery (`player_mail`). A mass mail is one content row and many delivery rows inserted by the worker.
+邮件拆分为内容（`mail_messages`）、附件（`mail_attachments`）和玩家投递记录（`player_mail`）。群发邮件只创建一条内容记录，再由 Worker 插入多条投递记录。
 
-`announcements` can be global (`scope = 'global'`, no game) or per game.
+`announcements` 可以是全局公告（`scope = 'global'`，不关联游戏），也可以属于单款游戏。
 
-`activities.config` holds the tasks and reward table of an activity; `activity_claims` records each claimed reward once.
+`activities.config` 保存活动任务和奖励表；`activity_claims` 确保每项奖励只领取一次。
 
-`reward_jobs` is the operator-facing record of a batch; its execution lives in `system.background_jobs`.
+`reward_jobs` 面向运营人员保存批处理信息；具体执行状态保存在 `system.background_jobs`。
 
 ### ranking
 
-PostgreSQL holds the scores. `period_key` is part of the entry key so that daily, weekly and season boards keep one row per player per period. Snapshots freeze a finished period.
+分数存储在 PostgreSQL。条目主键包含 `period_key`，使日榜、周榜和赛季榜在每个周期内都能为每位玩家保存一条记录。快照用于冻结已结束周期的数据。
 
-### admin and audit
+### admin 和 audit
 
-Administrators are platform-level and have no `game_id`. Scope lives on the role assignment (`admin_user_roles.scope_type`, `game_id`).
+管理员属于平台级，不包含 `game_id`。范围记录在角色分配上（`admin_user_roles.scope_type`、`game_id`）。
 
-Both audit tables are append-only by trigger and by privilege. See [audit-policy.md](../security/audit-policy.md).
+两张审计表都通过触发器和权限设置为只追加。详见[审计策略](../security/audit-policy.md)。
 
 ### analytics
 
-`game_events` is raw client and server events, deduplicated by `(game_id, event_id)`. Daily tables hold aggregates produced by the worker. Nothing here is authoritative and nothing here grants assets.
+`game_events` 保存客户端和服务端上报的原始事件，并通过 `(game_id, event_id)` 去重。每日统计表保存 Worker 生成的聚合结果。此处的数据都不是权威数据，也不得用于发放资产。
 
 ### system
 
-`idempotency_keys` stores request-level replays. `outbox_events` and `background_jobs` are described in [async-job-design.md](../architecture/async-job-design.md). The three `service_*` tables exist for the reserved internal API and are empty in V1.
+`idempotency_keys` 保存请求级重放结果。`outbox_events` 和 `background_jobs` 详见[异步任务设计](../architecture/async-job-design.md)。三个 `service_*` 表为预留的内部 API 准备，V1 中为空。
 
-## 4. Where JSONB is used
+## 4. JSONB 的使用范围
 
-| Column | Why it is JSONB | Not allowed inside |
+| 列 | 使用 JSONB 的原因 | 禁止包含 |
 |---|---|---|
-| `player_saves.save_data`, snapshots | Game-specific state the platform does not interpret | Balances, items, entitlements |
-| `config_versions.content` | Game-defined configuration validated by JSON Schema | — |
-| `game_runs.run_context`, `run_settlements.result`, `rewards` | Per-game rule snapshot and claim | — |
-| `ad_placements.reward_rule`, `activities.config`, `leaderboards.ranking_rule` | Rule definitions that differ per game | — |
-| `mail_messages.target_filter`, job and outbox `payload` | Variable shape per target or job type | Secrets |
-| `*_audit_logs.before_data` / `after_data` | Redacted snapshots of arbitrary entities | Passwords, tokens, keys |
-| `daily_*_stats.metrics` | Metric set grows over time | — |
+| `player_saves.save_data`、快照 | 平台不解释的游戏专属状态 | 余额、道具、权益 |
+| `config_versions.content` | 由游戏定义并通过 JSON Schema 校验的配置 | — |
+| `game_runs.run_context`、`run_settlements.result`、`rewards` | 游戏规则快照和结算声明 | — |
+| `ad_placements.reward_rule`、`activities.config`、`leaderboards.ranking_rule` | 各游戏不同的规则定义 | — |
+| `mail_messages.target_filter`、任务和 Outbox 的 `payload` | 按目标或任务类型变化的结构 | 密钥 |
+| `*_audit_logs.before_data` / `after_data` | 任意实体的脱敏快照 | 密码、令牌、密钥 |
+| `daily_*_stats.metrics` | 指标集合会随时间增长 | — |
 
-Anything queried by value, constrained, or summed gets a real column.
+按值查询、需约束或需求和的字段都应使用独立列。
 
-## 5. Tables that will grow
+## 5. 预期增长较快的数据表
 
-| Table | Growth driver | Plan |
+| 表 | 增长来源 | 处理方案 |
 |---|---|---|
-| `analytics.game_events` | Every client event | First candidate for time partitioning and short retention; move to a separate store when volume justifies it |
-| `economy.wallet_transactions`, `item_transactions` | Every asset change | Partition by time; retention is a policy decision because it is the financial record |
-| `auth.login_records` | Every login | Partition by time; retention by policy |
-| `audit.admin_audit_logs`, `service_audit_logs` | Every GM mutation | Long retention; archive, never delete inside the retention period |
-| `gameplay.game_runs`, `run_settlements`, `run_events` | Every run | Archive old runs |
-| `operation.player_mail` | Mass mail × players | Delete expired and claimed mail after a retention period |
-| `system.background_jobs`, `outbox_events`, `idempotency_keys` | Operations | Cleanup job |
+| `analytics.game_events` | 每次客户端事件 | 优先考虑按时间分区和较短保留期；数据量足够时迁至独立存储 |
+| `economy.wallet_transactions`、`item_transactions` | 每次资产变更 | 按时间分区；因其属于财务记录，保留期限需通过策略决定 |
+| `auth.login_records` | 每次登录 | 按时间分区；按策略确定保留期 |
+| `audit.admin_audit_logs`、`service_audit_logs` | 每次 GM 变更 | 长期保留；归档，保留期内绝不删除 |
+| `gameplay.game_runs`、`run_settlements`、`run_events` | 每场对局 | 归档旧对局 |
+| `operation.player_mail` | 群发邮件 × 玩家数 | 保留期后删除过期及已领取邮件 |
+| `system.background_jobs`、`outbox_events`、`idempotency_keys` | 系统操作 | 定时清理任务 |
 
-Partitioning and retention are decided from measured volume, not up front (ADR-0006). Retention periods are an open question in [decisions.md](../architecture/decisions.md).
+根据实际测得的数据量决定分区和保留策略，而非提前设定（ADR-0006）。保留期限仍是[决策文档](../architecture/decisions.md)中的待决事项。
 
-## 6. Changing the schema
+## 6. Schema 变更
 
-- `schema.sql` is the reviewed baseline. T03 turns it into ordered migrations under `/migrations`; after that, the migrations are the source of truth and `schema.sql` is regenerated or retired. **(proposal: retire it once migrations exist, to avoid two sources.)**
-- An applied migration is never edited.
-- Changes follow expand and contract.
-- Every new table is reviewed for game scope, unique constraints, indexes, retention and personal-data classification.
+- `schema.sql` 是经评审的基线。T03 会将其转换为 `/migrations` 下的有序迁移；此后迁移将成为事实来源，`schema.sql` 则重新生成或退役。**（提案：** 迁移建立后退役此文件，以避免出现两个事实来源。）
+- 已应用的迁移绝不修改。
+- 变更遵循扩展/收缩流程。
+- 每张新表都需评审其游戏范围、唯一约束、索引、保留期限和个人数据分类。

@@ -1,52 +1,52 @@
-# Service boundaries
+﻿# 服务边界
 
-- **Status:** Draft for review (2026-11-23)
-- **Elaborates:** [ADR-0001](../adr/ADR-0001-modular-monolith.md), [ADR-0005](../adr/ADR-0005-api-service-boundaries.md), [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)
-- **Source:** sections 2.2, 2.3, 6.3, 6.4 and 8.3 of the [technical design](../game-platform-technical-design.md)
+- **状态：** 评审草案（2026-11-23）
+- **细化：** [ADR-0001](../adr/ADR-0001-modular-monolith.md)、[ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)
+- **来源：** [技术设计](../game-platform-technical-design.md)第 2.2、2.3、6.3、6.4 和 8.3 节
 
-Where this document and an ADR disagree, the ADR wins. Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+若本文档与 ADR 冲突，以 ADR 为准。标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. The four entries
+## 1. 四个入口
 
-| Entry | Caller | Authentication | May do | Must never do |
+| 入口 | 调用方 | 认证 | 可以做什么 | 绝不可做什么 |
 |---|---|---|---|---|
-| `game-api` | Game client | Player token | Act on the token's own player in the token's own game | Accept an arbitrary `player_id` or `game_id`; expose any GM operation |
-| `gm-api` | `gm-web` | Admin session after MFA, RBAC with game scope | Read and operate on players, economy, config and operations inside the administrator's scope | Accept a player token; process a batch inside the request; set a balance directly |
-| `game-worker` | None (pulls jobs) | Runs as `system` actor | Execute jobs and outbox events through `gamecore` | Hold GM permissions; call `gamecore` over HTTP |
-| `internal-api` | Trusted services | Service identity (HMAC AK/SK or mTLS) | Reserved contract: job control, batch execution, internal events, maintenance | Become a second GM API; be reachable from the public internet |
+| `game-api` | 游戏客户端 | 玩家令牌 | 操作令牌所属游戏中该令牌玩家自己的数据 | 接受任意 `player_id` 或 `game_id`；暴露任何 GM 操作 |
+| `gm-api` | `gm-web` | MFA 后的管理员会话，以及带游戏范围的 RBAC | 在管理员授权范围内读取和操作玩家、经济、配置与运营数据 | 接受玩家令牌；在请求中执行批量任务；直接设置余额 |
+| `game-worker` | 无（主动拉取任务） | 以 `system` Actor 运行 | 通过 `gamecore` 执行任务和 Outbox 事件 | 持有 GM 权限；通过 HTTP 调用 `gamecore` |
+| `internal-api` | 可信服务 | 服务身份（HMAC AK/SK 或 mTLS） | 预留契约：任务控制、批处理、内部事件和维护 | 演变成第二套 GM API；从公网访问 |
 
-Splitting `game-api` and `gm-api` is a security decision, not a scaling one. A URL prefix cannot express the difference between "a player may read their own wallet" and "an operator may debit any wallet in game X".
+拆分 `game-api` 与 `gm-api` 是安全决策，而非扩缩容决策。仅用 URL 前缀无法表达“玩家只能读取自己的钱包”和“运营人员可以扣除游戏 X 中任意钱包”之间的权限差异。
 
-## 2. What is shared and what is not
+## 2. 共享内容与隔离内容
 
-| Shared (one copy in `internal/gamecore`) | Per entry (never shared) |
+| 共享（在 `internal/gamecore` 中只有一份） | 按入口隔离（绝不共享） |
 |---|---|
-| Domain model and invariants | Handlers |
-| Application services and transaction boundaries | Routers |
-| Repository interfaces and implementations | Authentication middleware |
-| | Request and response DTOs |
-| | Rate-limit policy, CORS, body limits |
-| | Process configuration, image, health checks |
+| 领域模型和不变量 | Handler |
+| 应用服务和事务边界 | Router |
+| Repository 接口和实现 | 认证中间件 |
+| | 请求与响应 DTO |
+| | 限流策略、CORS、请求体限制 |
+| | 进程配置、镜像、健康检查 |
 
-A player-facing DTO and a GM-facing DTO of the same entity are allowed to differ and are defined twice on purpose.
+面向玩家和面向 GM 的同一实体 DTO 可以不同，并且有意分别定义。
 
-## 3. Import rules
+## 3. 导入规则
 
-| Package | May import | Must not import |
+| 包 | 可以导入 | 禁止导入 |
 |---|---|---|
-| `internal/gamecore/domain` | Standard library, `internal/shared` | Everything else in the module |
-| `internal/gamecore/application` | `domain`, `repository` interfaces, `internal/shared` | `transport`, `security`, Gin |
-| `internal/gamecore/repository` | `domain`, `internal/infrastructure/postgres` | `transport`, Gin |
-| `internal/transport/http/game` | `gamecore/application`, `security/playerauth` | `transport/http/gm`, `transport/http/internal`, `security/adminauth` |
-| `internal/transport/http/gm` | `gamecore/application`, `security/adminauth` | `transport/http/game`, `transport/http/internal`, `security/playerauth` |
-| `internal/transport/http/internal` | `gamecore/application`, `security/serviceauth` | The other two transport packages |
-| `services/game-worker` | `gamecore/application`, `internal/infrastructure` | Any `transport` package |
+| `internal/gamecore/domain` | 标准库、`internal/shared` | 本模块中的其他所有包 |
+| `internal/gamecore/application` | `domain`、`repository` 接口、`internal/shared` | `transport`、`security`、Gin |
+| `internal/gamecore/repository` | `domain`、`internal/infrastructure/postgres` | `transport`、Gin |
+| `internal/transport/http/game` | `gamecore/application`、`security/playerauth` | `transport/http/gm`、`transport/http/internal`、`security/adminauth` |
+| `internal/transport/http/gm` | `gamecore/application`、`security/adminauth` | `transport/http/game`、`transport/http/internal`、`security/playerauth` |
+| `internal/transport/http/internal` | `gamecore/application`、`security/serviceauth` | 另外两个传输层包 |
+| `services/game-worker` | `gamecore/application`、`internal/infrastructure` | 任何 `transport` 包 |
 
-**(proposal)** Enforce these rules in CI with an import-boundary linter (for example `depguard` in golangci-lint or `go-arch-lint`), so a violation fails the build instead of relying on review.
+**（提案）** 在 CI 中使用导入边界 lint 工具（例如 golangci-lint 中的 `depguard` 或 `go-arch-lint`）强制执行规则，使违规直接导致构建失败，而非只依赖评审发现。
 
-## 4. The Actor contract
+## 4. Actor 契约
 
-Every application-service method takes an `Actor` as its first business argument.
+每个应用服务方法都将 `Actor` 作为第一个业务参数。
 
 ```go
 type Actor struct {
@@ -58,67 +58,67 @@ type Actor struct {
 }
 ```
 
-- The entry builds the `Actor` after authentication and authorization. No field is copied from a request body, query string or header supplied by the client.
-- `gamecore` re-checks what only it can know: that the target row belongs to `actor.GameID`, and, for a player actor, that the target player is the actor.
-- Ledger rows, audit rows and job rows record `actor_type` and `actor_id`.
+- 入口在完成认证和授权后构造 `Actor`。任何字段都不得从客户端提供的请求体、查询字符串或请求头复制。
+- `gamecore` 重新校验只有自身才知道的信息：目标行属于 `actor.GameID`；若为玩家 Actor，目标玩家必须就是该 Actor。
+- 流水、审计和任务记录都保存 `actor_type` 和 `actor_id`。
 
-| Entry | `Type` | `ID` | `GameID` |
+| 入口 | `Type` | `ID` | `GameID` |
 |---|---|---|---|
-| `game-api` | `player` | Player ID from the token | Game ID from the token |
-| `gm-api` | `admin` | Administrator ID from the session | Path `game_id`, after the scope check |
-| `game-worker` | `system` | Worker instance name | From the job row |
-| `internal-api` | `service` | Service identity ID | Request `game_id`, after the grant check |
+| `game-api` | `player` | 令牌中的玩家 ID | 令牌中的游戏 ID |
+| `gm-api` | `admin` | 会话中的管理员 ID | 权限范围校验通过后的路径 `game_id` |
+| `game-worker` | `system` | Worker 实例名称 | 任务记录中的游戏 ID |
+| `internal-api` | `service` | 服务身份 ID | 服务授权校验通过后的请求 `game_id` |
 
-## 5. Third-party callbacks
+## 5. 第三方回调
 
-Calls that a platform makes to us are a separate surface: `/platform-callbacks/v1/<platform>/...`. They come from the public internet, carry no player token and no internal credential, and are authenticated with the platform's own scheme.
+平台发给我们的调用通过独立入口 `/platform-callbacks/v1/<platform>/...` 接收。请求来自公网，不带玩家令牌或内部凭据，使用平台自有机制认证。
 
-### 5.1 What they are for
+### 5.1 用途
 
-| Scenario | Trigger | What the server does | Needed in V1 |
+| 场景 | 触发方式 | 服务端处理 | V1 是否需要 |
 |---|---|---|---|
-| Rewarded-ad server-side verification | WeChat's ad server calls the developer server when a player qualifies for the reward. WeChat documents this as an optional verification mode. | Verify the request, match it to the `ad_session`, mark the session as server-verified so the claim no longer depends on the client flag alone | Decision needed; it directly reduces ad-reward fraud |
-| WeChat message push: customer-service messages | A player opens the customer-service chat or sends a message | Receive the message or event; optionally reply or forward to a support tool | Only if in-game customer service is used |
-| WeChat message push: subscription-message events | A player accepts or rejects a subscription; a send succeeds or fails | Record the result so reminders are sent only to players who opted in | Only if subscription messages are used |
-| WeChat message push: asynchronous content-safety results | The server submitted an image or audio for checking | Receive the verdict and block or allow the content | Only if players can upload media |
-| Virtual-payment delivery and payment events | A player pays for coins or an item | Verify, deduplicate, grant through the economy service, answer within the platform's timeout | No. Payments are out of V1 scope |
-| Callbacks of other platforms | Douyin, Alipay, native ad networks | Same pattern through that platform's adapter | No |
+| 激励广告服务端验证 | 玩家符合奖励条件时，微信广告服务器调用开发者服务器。微信将此列为可选验证模式。 | 验证请求，与 `ad_session` 匹配，并将会话标记为服务端已验证，使领取不再仅依赖客户端标记 | 待决；可直接降低广告奖励作弊 |
+| 微信消息推送：客服消息 | 玩家打开客服会话或发送消息 | 接收消息或事件；可选择回复或转发至客服工具 | 仅当游戏内使用客服时需要 |
+| 微信消息推送：订阅消息事件 | 玩家接受或拒绝订阅；消息发送成功或失败 | 记录结果，仅向已同意的玩家发送提醒 | 仅当使用订阅消息时需要 |
+| 微信消息推送：异步内容安全结果 | 服务端提交图片或音频进行检测 | 接收结果并拦截或放行内容 | 仅当玩家可以上传媒体时需要 |
+| 虚拟支付发货及支付事件 | 玩家购买金币或道具 | 验证、去重、通过经济服务发放，并在平台超时前响应 | 不需要；支付不在 V1 范围内 |
+| 其他平台回调 | 抖音、支付宝、原生广告网络 | 通过相应平台适配器采用相同模式 | 不需要 |
 
-The field list, signature algorithm and retry behaviour of the ad verification callback were not retrieved when this document was written. Read the current WeChat page before designing the endpoint: <https://developers.weixin.qq.com/minigame/dev/guide/security/antiadcheat.html>.
+编写本文档时尚未获取广告验证回调的字段列表、签名算法和重试行为。设计端点前请查阅微信最新文档。
 
-### 5.2 Rules
+### 5.2 规则
 
-- Verify with the platform's own signature, token or encryption scheme. Internal AK/SK rules never apply.
-- Check the timestamp and reject stale requests where the platform provides one.
-- Deduplicate by the platform's message or transaction ID through a unique key. Platforms retry.
-- Resolve `game_id` from the receiving app (`app_id` in the URL or payload), never from a free parameter.
-- Do the work in one transaction through `gamecore`, then return the exact success response the platform expects. Anything slow becomes a background job.
-- Apply an IP policy where the platform publishes its address ranges.
-- Log the event type and outcome; never log tokens, keys or message bodies that contain personal data.
+- 使用平台自有签名、令牌或加密机制进行验证，绝不使用内部 AK/SK 规则。
+- 平台提供时间戳时，检查并拒绝过期请求。
+- 通过平台消息或交易 ID 的唯一键去重；平台可能重试。
+- 根据接收应用解析 `game_id`（URL 或请求体中的 `app_id`），绝不使用任意客户端参数。
+- 通过 `gamecore` 在一个事务中完成工作，然后返回平台要求的准确成功响应。耗时工作转为后台任务。
+- 平台公布 IP 地址范围时，应用对应的 IP 策略。
+- 记录事件类型和结果；绝不记录令牌、密钥或包含个人数据的消息正文。
 
-### 5.3 Where it runs: open decision
+### 5.3 承载位置：待决事项
 
-| Option | For | Against |
+| 选项 | 优点 | 缺点 |
 |---|---|---|
-| **A. Route group in `game-api`** (assumed by ADR-0005) | No extra process; already public; shares the player-side rate-limit and WAF setup | A callback outage or flood shares capacity with player traffic |
-| B. Separate `callback-api` process | Independent scaling and failure domain | A fourth deployed service for very little traffic in V1 |
-| C. Not built in V1 | Nothing to operate | Ad rewards rely on the client flag plus limits only |
+| **A. 在 `game-api` 中设置路由组**（ADR-0005 的假设） | 无需额外进程；已暴露公网；可共用玩家端限流和 WAF 配置 | 回调故障或流量洪峰会占用玩家流量容量 |
+| B. 独立的 `callback-api` 进程 | 独立扩缩容和故障域 | V1 流量很少，却要多运维第四个服务 |
+| C. V1 不实现 | 无需运维 | 广告奖励仅依赖客户端标记和限额 |
 
-Nothing has to be built until the first callback is actually needed. If rewarded-ad server-side verification is adopted for V1, option A is the smallest change.
+在确实需要第一个回调前，无需实现任何方案。若 V1 采用激励广告服务端验证，选项 A 是最小改动。
 
-## 6. Checklist for adding an endpoint
+## 6. 新增端点检查清单
 
-1. Which entry does the caller belong to? If the answer is "both players and operators", it is two endpoints.
-2. Add the operation to that entry's OpenAPI file first.
-3. Name the permission code (GM) or the ownership rule (player).
-4. State idempotency: `Idempotency-Key`, or a natural unique key, or read-only.
-5. State the transaction boundary and whether an audit row or an outbox event is written in it.
-6. Put the rule in `gamecore`; the handler only parses, calls and maps the result.
+1. 调用方属于哪个入口？若“玩家和运营人员都要用”，则应设计两个端点。
+2. 先将操作加入对应入口的 OpenAPI 文件。
+3. 指定权限代码（GM）或所有权规则（玩家）。
+4. 说明幂等策略：`Idempotency-Key`、自然唯一键或只读。
+5. 说明事务边界，以及事务中是否写入审计或 Outbox 事件。
+6. 在 `gamecore` 中实现规则；Handler 只负责解析请求、调用服务和映射结果。
 
-## 7. Things that look convenient and are not allowed
+## 7. 看似方便但禁止的做法
 
-- A shared handler or middleware "because the logic is the same".
-- A `player_id` query parameter on a `game-api` route.
-- `gm-api` calling `game-api`, or the worker calling either, over HTTP.
-- A GM endpoint that loops over players inside the request.
-- An internal endpoint that only wraps a function the caller could reach in-process.
+- 因为“逻辑相同”就共享 Handler 或中间件。
+- 在 `game-api` 路由上添加 `player_id` 查询参数。
+- `gm-api` 调用 `game-api`，或 Worker 通过 HTTP 调用任一 API。
+- 在请求中循环处理玩家的 GM 端点。
+- 只包装调用方可在进程内直接调用函数的内部端点。

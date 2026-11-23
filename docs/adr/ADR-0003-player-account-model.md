@@ -1,50 +1,50 @@
-# ADR-0003 — Player account model
+﻿# ADR-0003 — 玩家账号模型
 
-- **Status:** Accepted
-- **Date:** 2026-11-23
-- **Supersedes:** ADR-003 in `docs/architecture/decisions.md` v1.0
-- **Related:** [ADR-0002](ADR-0002-game-isolation.md), [ADR-0005](ADR-0005-api-service-boundaries.md)
+- **状态：** 已接受
+- **日期：** 2026-11-23
+- **取代：** `docs/architecture/decisions.md` v1.0 中的 ADR-003
+- **相关：** [ADR-0002](ADR-0002-game-isolation.md)、[ADR-0005](ADR-0005-api-service-boundaries.md)
 
-## Context
+## 背景
 
-The first platform is WeChat Mini Games; Douyin, Alipay and native Android/iOS may follow. The same WeChat user can play several games on the platform.
+首个接入平台为微信小游戏，后续可能支持抖音、支付宝和原生 Android/iOS。同一微信用户可以在平台上体验多款游戏。
 
-## Decision
+## 决策
 
-**Accounts are per game.**
+**账号按游戏隔离。**
 
-- The same WeChat user entering two games gets two different `player_id` values.
-- External identity uniqueness is `UNIQUE (game_id, platform, app_id, openid)`.
-- A player may have several external identities inside one game. `unionid` may be stored, but equal `unionid` values never merge players across games.
+- 同一微信用户进入两款游戏时，会获得不同的 `player_id`。
+- 外部身份唯一约束为 `UNIQUE (game_id, platform, app_id, openid)`。
+- 玩家在同一款游戏中可以绑定多个外部身份。可以存储 `unionid`，但即使 `unionid` 相同，也绝不跨游戏合并玩家。
 
-**WeChat login.**
+**微信登录流程。**
 
-1. The client calls `wx.login()` and sends the temporary code to `game-api`.
-2. The server resolves the game from the platform app, calls `jscode2session` with that app's secret, and obtains the OpenID.
-3. The server maps the identity to a player in that game, creating the player if none exists. Creation is idempotent under concurrent logins through the unique identity key.
-4. The server issues its own access and refresh tokens. The client uses only platform tokens afterwards.
+1. 客户端调用 `wx.login()`，并将临时 code 发送给 `game-api`。
+2. 服务端根据平台应用解析游戏，使用该应用的密钥调用 `jscode2session`，获取 OpenID。
+3. 服务端在该游戏内将此身份映射到玩家；若不存在则创建。并发登录时通过身份唯一键保证创建幂等。
+4. 服务端签发自有 access 和 refresh token；此后客户端只使用平台令牌。
 
-**Credential handling.**
+**凭据处理。**
 
-- AppSecret is held only in the server-side secret store; the database stores a reference.
-- WeChat `session_key` is never returned to the client.
-- Refresh tokens are stored as hashes, rotated on use, and can be revoked. Logout, revocation and bans are supported.
-- Login is rate limited. Failed WeChat logins are recorded with a diagnosable error code in `auth.login_records`, without the code, `session_key` or tokens.
+- AppSecret 仅保存在服务端密钥库中，数据库只存储其引用。
+- 不得向客户端返回微信 `session_key`。
+- Refresh token 以哈希形式存储，使用时轮换，并可撤销。支持登出、撤销和封禁。
+- 登录接口应限流。失败的微信登录记录在 `auth.login_records`，保留可诊断错误码，但不记录 code、`session_key` 或令牌。
 
-**Initial token lifetimes** (adjustable after security review):
+**初始令牌有效期**（可在安全评审后调整）：
 
-| Token | Initial value |
+| 令牌 | 初始值 |
 |---|---|
-| Player access token | 1 hour |
-| Player refresh token | 30 days |
-| GM access token | 15–30 minutes |
-| GM refresh token | Set by security policy; revocable |
-| Service credential | Separate AK/SK or mTLS |
+| 玩家 access token | 1 小时 |
+| 玩家 refresh token | 30 天 |
+| GM access token | 15–30 分钟 |
+| GM refresh token | 由安全策略确定，可撤销 |
+| 服务凭据 | 独立 AK/SK 或 mTLS |
 
-**Platform adapter.** Provider-specific login lives behind an adapter in `internal/platform/<provider>`. `gamecore` works with normalized identity records and does not depend on WeChat data structures.
+**平台适配器。** 各平台的登录逻辑位于 `internal/platform/<provider>` 下的适配器中。`gamecore` 使用规范化身份记录，不依赖微信数据结构。
 
-## Consequences
+## 后果
 
-- Adding a platform means adding an adapter and a `game_platform_apps` row, not a new player model.
-- Cross-game account linking is out of scope and would need a new ADR.
-- A player who reinstalls or changes devices keeps the account through the OpenID; there is no platform-level account recovery flow in V1.
+- 新增平台只需增加适配器和一条 `game_platform_apps` 记录，无需新增玩家模型。
+- 跨游戏账号关联不在范围内，需另行通过 ADR 决策。
+- 玩家重装应用或更换设备后，可通过 OpenID 找回账号；V1 不提供平台级账号恢复流程。

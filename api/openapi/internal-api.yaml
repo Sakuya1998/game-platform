@@ -1,31 +1,31 @@
 openapi: 3.1.0
 info:
-  title: Game Platform Internal API
+  title: 游戏平台内部 API
   version: 2.0.0
   description: |
-    Service-to-service contract for `internal-api`. Design baseline v2.0 (2026-11-23); see
-    docs/game-platform-technical-design.md section 6.3 and docs/adr/ADR-0008-internal-api-and-worker.md.
+    `internal-api` 的服务间调用契约。设计基线 v2.0（2026-11-23），详见
+    `docs/game-platform-technical-design.md` 第 6.3 节及 `docs/adr/ADR-0008-internal-api-and-worker.md`。
 
-    **Status: reserved. `internal-api` is not deployed in V1.** In V1 `game-worker` calls
-    `gamecore` in-process and does not use this API. The contract exists so that independent
-    workers or other trusted systems can be given HTTP access later without changing `gamecore`.
+    **状态：预留。V1 不部署 `internal-api`。** V1 中，`game-worker` 在进程内调用
+    `gamecore`，不使用此 API。保留此契约是为了未来独立
+    Worker 或其他可信系统需要 HTTP 访问时，无须修改 `gamecore` 即可启用。
 
-    Rules that apply to every operation once the service is deployed:
+    服务部署后，所有操作均适用以下规则：
 
-    - Reachable from the private network only; never routed through the public ingress.
-    - The caller is a service identity, authenticated by HMAC AK/SK signature or mTLS. Player and
-      administrator tokens are never accepted.
-    - Signed requests carry a timestamp and a nonce; stale or replayed requests are rejected.
-    - Authorization is per service identity and per game: a `game_id` in a request is accepted
-      only if the service holds a matching grant (`x-required-permission`).
-    - Mutations require `Idempotency-Key`. Every call is written to the service audit log.
-    - This API is not a second GM API: it exposes no operator workflows.
-    - Third-party platform callbacks (WeChat, ad platforms) are not part of this API. They live
-      under `/platform-callbacks/v1` with each platform's own verification.
-    - Responses use the envelope `{ code, message, data, request_id }`.
+    - 仅限私有网络访问；绝不通过公网入口路由。
+    - 调用方必须是服务身份，并通过 HMAC AK/SK 签名或 mTLS 认证。绝不接受玩家或
+      管理员令牌。
+    - 签名请求必须携带时间戳和 nonce；拒绝过期或重放请求。
+    - 按服务身份和游戏分别授权：只有服务拥有对应授权
+      （`x-required-permission`）时，才接受请求中的 `game_id`。
+    - 变更操作必须携带 `Idempotency-Key`。每次调用都写入服务审计日志。
+    - 此 API 不是第二套 GM API：不提供任何运营工作流。
+    - 第三方平台回调（微信、广告平台）不属于此 API，统一位于
+      `/platform-callbacks/v1` 下，并使用各平台自有的验证机制。
+    - 响应使用 `{ code, message, data, request_id }` 信封。
 servers:
   - url: https://internal.example.com
-    description: Private network only
+    description: 仅限私有网络
 security:
   - ServiceHmac: []
   - ServiceMtls: []
@@ -41,7 +41,7 @@ paths:
     post:
       tags: [Jobs]
       operationId: claimJob
-      summary: Claim a pending job and take a lease on it
+      summary: 领取待处理任务并获取租约
       x-required-permission: job.execute
       parameters:
         - $ref: '#/components/parameters/JobId'
@@ -62,7 +62,7 @@ paths:
                 lease_seconds: { type: integer, minimum: 10, maximum: 3600, default: 60 }
       responses:
         '200':
-          description: Job claimed
+          description: 任务已领取
           content:
             application/json:
               schema:
@@ -79,7 +79,7 @@ paths:
     post:
       tags: [Jobs]
       operationId: heartbeatJob
-      summary: Extend the lease of a running job
+      summary: 延长运行中任务的租约
       x-required-permission: job.execute
       parameters:
         - $ref: '#/components/parameters/JobId'
@@ -97,10 +97,10 @@ paths:
               properties:
                 lease_token: { type: string }
                 lease_seconds: { type: integer, minimum: 10, maximum: 3600, default: 60 }
-                progress: { type: object, description: Optional progress counters. }
+                progress: { type: object, description: 可选的进度计数器。 }
       responses:
         '200':
-          description: Lease extended
+          description: 租约已延长
           content:
             application/json:
               schema:
@@ -117,7 +117,7 @@ paths:
     post:
       tags: [Jobs]
       operationId: completeJob
-      summary: Mark a job as succeeded
+      summary: 将任务标记为成功
       x-required-permission: job.execute
       parameters:
         - $ref: '#/components/parameters/JobId'
@@ -146,8 +146,8 @@ paths:
     post:
       tags: [Jobs]
       operationId: failJob
-      summary: Report a job failure
-      description: The server decides between `retrying` (with backoff) and `failed` from the job's retry budget.
+      summary: 上报任务失败
+      description: 服务端根据任务剩余重试次数，决定将状态设为 `retrying`（并执行退避）或 `failed`。
       x-required-permission: job.execute
       parameters:
         - $ref: '#/components/parameters/JobId'
@@ -169,7 +169,7 @@ paths:
                 retryable: { type: boolean, default: true }
       responses:
         '200':
-          description: Failure recorded
+          description: 失败已记录
           content:
             application/json:
               schema:
@@ -191,8 +191,8 @@ paths:
     post:
       tags: [Mail]
       operationId: executeMailDelivery
-      summary: Deliver one batch of a mail to players
-      description: Delivery is idempotent per `(mail_id, player_id)`.
+      summary: 向玩家投递一批邮件
+      description: 每个 `(mail_id, player_id)` 的邮件投递均保证幂等。
       x-required-permission: mail.deliver
       parameters:
         - $ref: '#/components/parameters/Timestamp'
@@ -218,7 +218,7 @@ paths:
                   items: { type: string, format: uuid }
       responses:
         '200':
-          description: Batch processed
+          description: 批次已处理
           content:
             application/json:
               schema:
@@ -235,10 +235,10 @@ paths:
     post:
       tags: [Rewards]
       operationId: executeRewardJob
-      summary: Grant one batch of a reward job
+      summary: 执行奖励任务的一批发放
       description: |
-        Rewards are defined by the reward job, not by the caller. Each grant goes through the
-        economy service and is idempotent per player through the ledger unique key.
+        奖励由奖励任务定义，而非由调用方提交。每项发放均经过
+        经济服务，并通过流水唯一键保证每位玩家的操作幂等。
       x-required-permission: reward.execute
       parameters:
         - $ref: '#/components/parameters/Timestamp'
@@ -263,7 +263,7 @@ paths:
                   items: { type: string, format: uuid }
       responses:
         '200':
-          description: Batch processed
+          description: 批次已处理
           content:
             application/json:
               schema:
@@ -280,7 +280,7 @@ paths:
     post:
       tags: [Analytics]
       operationId: ingestEvents
-      summary: Write a batch of events from a trusted internal producer
+      summary: 写入可信内部生产者上报的一批事件
       x-required-permission: event.write
       parameters:
         - $ref: '#/components/parameters/Timestamp'
@@ -312,7 +312,7 @@ paths:
                       payload: { type: object }
       responses:
         '202':
-          description: Events accepted; duplicates by `event_id` are ignored
+          description: 事件已接收；重复的 `event_id` 将被忽略
           content:
             application/json:
               schema:
@@ -332,7 +332,7 @@ paths:
     post:
       tags: [Config]
       operationId: notifyConfigRelease
-      summary: Notify that a config release was published so caches and CDN can be refreshed
+      summary: 通知配置已发布，以便刷新缓存和 CDN
       x-required-permission: config.notify
       parameters:
         - $ref: '#/components/parameters/Timestamp'
@@ -359,8 +359,8 @@ paths:
     post:
       tags: [Maintenance]
       operationId: createMaintenanceTask
-      summary: Enqueue a controlled maintenance task
-      description: Only allowlisted task types are accepted. The task runs as a background job.
+      summary: 将受控维护任务加入队列
+      description: 仅接受允许列表中的任务类型，并以后台任务方式执行。
       x-required-permission: maintenance.run
       parameters:
         - $ref: '#/components/parameters/Timestamp'
@@ -387,11 +387,11 @@ paths:
                 game_id:
                   type: [string, 'null']
                   format: uuid
-                  description: Required for game-scoped task types.
+                  description: 游戏范围的任务类型必填。
                 params: { type: object }
       responses:
         '202':
-          description: Task enqueued
+          description: 任务已入队
           content:
             application/json:
               schema:
@@ -414,13 +414,13 @@ components:
       in: header
       name: X-Access-Key
       description: |
-        Access key ID of a service credential. The request is signed with the matching secret
-        (HMAC-SHA256) over method, path, query, timestamp, nonce and body hash, and the signature
-        is sent in `X-Signature`. The canonical string format is fixed when the service is first
-        deployed.
+        服务凭据的 Access Key ID。使用匹配的密钥对请求签名
+        （HMAC-SHA256），签名内容包括方法、路径、查询参数、时间戳、nonce 和请求体哈希；签名
+        放在 `X-Signature` 中。服务首次
+        部署时确定规范字符串格式。
     ServiceMtls:
       type: mutualTLS
-      description: Client certificate whose fingerprint is registered for a service identity.
+      description: 客户端证书，其指纹须已登记在服务身份中。
   parameters:
     JobId:
       name: job_id
@@ -430,17 +430,17 @@ components:
     Timestamp:
       name: X-Timestamp
       in: header
-      description: Request time, RFC 3339 UTC. Required with HMAC; requests outside the allowed clock skew are rejected.
+      description: 请求时间，RFC 3339 UTC。HMAC 认证时必填；超出允许时钟偏差的请求会被拒绝。
       schema: { type: string, format: date-time }
     Nonce:
       name: X-Nonce
       in: header
-      description: Unique per request. Required with HMAC; a repeated nonce inside the skew window is rejected.
+      description: 每个请求唯一。HMAC 认证时必填；时钟偏差窗口内重复的 nonce 会被拒绝。
       schema: { type: string, minLength: 16, maxLength: 64 }
     Signature:
       name: X-Signature
       in: header
-      description: HMAC-SHA256 signature, hex encoded. Required with HMAC.
+      description: 十六进制编码的 HMAC-SHA256 签名。HMAC 认证时必填。
       schema: { type: string }
     RequestId:
       name: X-Request-ID
@@ -454,32 +454,32 @@ components:
       schema: { type: string, minLength: 8, maxLength: 128 }
   responses:
     Ok:
-      description: Success
+      description: 成功
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
     BadRequest:
-      description: Invalid request
+      description: 请求无效
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Unauthorized:
-      description: Unknown credential, bad signature, stale timestamp or replayed nonce (`AUTH_UNAUTHORIZED`)
+      description: 凭据未知、签名错误、时间戳过期或 nonce 被重放（`AUTH_UNAUTHORIZED`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: The service identity lacks the permission or the game grant (`AUTH_FORBIDDEN`)
+      description: 服务身份缺少所需权限或游戏授权（`AUTH_FORBIDDEN`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     NotFound:
-      description: Resource not found (`RESOURCE_NOT_FOUND`)
+      description: 资源不存在（`RESOURCE_NOT_FOUND`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Conflict:
-      description: Lease lost, job already finished, or idempotency conflict (`IDEMPOTENCY_CONFLICT`)
+      description: 租约已丢失、任务已完成或发生幂等冲突（`IDEMPOTENCY_CONFLICT`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -496,7 +496,7 @@ components:
       type: object
       required: [code, message, request_id]
       properties:
-        code: { type: string, description: Stable machine-readable code. }
+        code: { type: string, description: 稳定、可供机器解析的代码。 }
         message: { type: string }
         data: {}
         request_id: { type: string }
@@ -516,7 +516,7 @@ components:
       required: [processed, skipped, failed]
       properties:
         processed: { type: integer }
-        skipped: { type: integer, description: Already delivered or granted earlier. }
+        skipped: { type: integer, description: 此前已投递或已发放。 }
         failed: { type: integer }
         failures:
           type: array

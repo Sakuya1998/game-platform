@@ -1,148 +1,148 @@
-# Audit policy
+﻿# 审计策略
 
-- **Status:** Draft for review (2026-11-23)
-- **Related:** [ADR-0005](../adr/ADR-0005-api-service-boundaries.md), [ADR-0007](../adr/ADR-0007-economy-transaction-model.md), [rbac-matrix.md](rbac-matrix.md)
-- **Source:** sections 5.2 K and 7.3 of the [technical design](../game-platform-technical-design.md); tables `audit.admin_audit_logs` and `audit.service_audit_logs` in [schema.sql](../database/schema.sql)
+- **状态：** 评审草案
+- **相关：** [ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[ADR-0007](../adr/ADR-0007-economy-transaction-model.md)、[RBAC 矩阵](rbac-matrix.md)
+- **来源：** [技术设计](../game-platform-technical-design.md)第 5.2 K 和 7.3 节；[schema.sql](../database/schema.sql) 中的 `audit.admin_audit_logs` 和 `audit.service_audit_logs` 表
 
-Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. Purpose
+## 1. 目的
 
-The audit log answers one question after the fact: who did what, to which target, in which game, when, why, and what changed. It is a business record, not a debugging log.
+审计日志用于事后回答：谁在何时、哪个游戏中、因何原因对什么目标执行了什么操作，造成了哪些变化。它是业务记录，不是调试日志。
 
-| | Audit log | Application log | Ledger |
+| | 审计日志 | 应用日志 | 资产流水 |
 |---|---|---|---|
-| Stored in | PostgreSQL, `audit` schema | Log platform | PostgreSQL, `economy` schema |
-| Written | In the transaction of the change | Best effort | In the transaction of the change |
-| Content | Operator actions | Requests and errors | Asset changes |
-| Can be lost | No | Yes | No |
+| 存储位置 | PostgreSQL 的 `audit` Schema | 日志平台 | PostgreSQL 的 `economy` Schema |
+| 写入方式 | 与变更在同一事务中 | 尽力写入 | 与变更在同一事务中 |
+| 内容 | 操作员行为 | 请求和错误 | 资产变更 |
+| 是否可丢失 | 否 | 是 | 否 |
 
-## 2. What is audited
+## 2. 审计范围
 
-### 2.1 Every GM mutation
+### 2.1 每一项 GM 变更
 
-Each state-changing operation of `gm-api` writes exactly one row to `audit.admin_audit_logs`. `action` is the permission code that authorized it.
+`gm-api` 的每项状态变更操作都必须在 `audit.admin_audit_logs` 中写入且仅写入一条记录。`action` 为授权该操作的权限代码。
 
 | `action` | `target_type` | `before_data` / `after_data` |
 |---|---|---|
-| `game.manage` | `game`, `game_platform_app`, `game_environment`, `game_setting` | Changed fields; never a secret, only `credential_ref` |
-| `player.ban`, `player.unban` | `player` | Status and ban row |
-| `player.save.restore` | `player_save` | `save_version` before and after, snapshot ID; not the save content |
-| `economy.grant`, `economy.deduct` | `wallet` | Currency, amount, balance before and after, ledger row ID |
-| `config.edit` | `game_config`, `config_version` | Key, version, checksum; not the full content |
-| `config.publish` | `config_release` | Release ID, type, items, previous active versions |
-| `mail.create` | `mail_message` | Title, target type, attachments |
-| `mail.send` | `mail_message` | Status, reward job ID, target count |
-| `activity.manage` | `activity` | Changed fields |
-| `announcement.manage` | `announcement` | Changed fields |
-| `ranking.manage` | `leaderboard` | Changed fields; rebuild request |
-| `admin.manage` | `admin_user` | Status and assignments; never password or MFA material |
-| `rbac.manage` | `role`, `admin_user_role` | Permission set or assignment before and after |
+| `game.manage` | `game`、`game_platform_app`、`game_environment`、`game_setting` | 变更字段；不含密钥，仅保存 `credential_ref` |
+| `player.ban`、`player.unban` | `player` | 状态和封禁记录 |
+| `player.save.restore` | `player_save` | 变更前后的 `save_version`、快照 ID；不含存档内容 |
+| `economy.grant`、`economy.deduct` | `wallet` | 货币、金额、变更前后余额、流水 ID |
+| `config.edit` | `game_config`、`config_version` | 键、版本、校验和；不含完整配置内容 |
+| `config.publish` | `config_release` | 发布 ID、类型、发布项、之前启用的版本 |
+| `mail.create` | `mail_message` | 标题、目标类型、附件 |
+| `mail.send` | `mail_message` | 状态、奖励任务 ID、目标数量 |
+| `activity.manage` | `activity` | 变更字段 |
+| `announcement.manage` | `announcement` | 变更字段 |
+| `ranking.manage` | `leaderboard` | 变更字段、重建请求 |
+| `admin.manage` | `admin_user` | 状态和角色分配；不含密码或 MFA 材料 |
+| `rbac.manage` | `role`、`admin_user_role` | 变更前后的权限集或分配关系 |
 
-### 2.2 GM security events (proposal)
+### 2.2 GM 安全事件（提案）
 
-The design requires monitoring of abnormal logins but defines no table for administrator login history. These events go to the same table, with action codes outside the permission vocabulary:
+设计要求监控异常登录，但尚未为管理员登录历史定义专门的数据表。此类事件也写入同一张表，使用权限代码体系之外的操作代码：
 
-| `action` | When |
+| `action` | 事件 |
 |---|---|
-| `auth.login` | Password step succeeded and MFA verified |
-| `auth.login_failed` | Wrong password or unknown user; `admin_id` may be null |
-| `auth.mfa_failed` | Wrong MFA code |
-| `auth.locked` | Account locked after repeated failures |
-| `auth.logout` | Session revoked by the administrator |
-| `auth.mfa_enrolled`, `auth.mfa_reset` | MFA set up or reset |
-| `auth.password_changed` | Password changed |
-| `job.retry`, `job.cancel` | Manual action on a background job |
+| `auth.login` | 密码校验成功并通过 MFA |
+| `auth.login_failed` | 密码错误或用户不存在；`admin_id` 可以为空 |
+| `auth.mfa_failed` | MFA 验证码错误 |
+| `auth.locked` | 多次失败后锁定账号 |
+| `auth.logout` | 管理员撤销会话 |
+| `auth.mfa_enrolled`、`auth.mfa_reset` | 注册或重置 MFA |
+| `auth.password_changed` | 修改密码 |
+| `job.retry`、`job.cancel` | 手动操作后台任务 |
 
-### 2.3 Service calls
+### 2.3 服务调用
 
-When `internal-api` is deployed, every call writes one row to `audit.service_audit_logs`, including calls that were denied (`result = 'denied'`). The table is empty in V1.
+部署 `internal-api` 后，每次调用（包括被拒绝的调用，`result = 'denied'`）都在 `audit.service_audit_logs` 中写入一条记录。V1 中该表为空。
 
-### 2.4 Not audited in V1
+### 2.4 V1 不审计的行为
 
-- **Reads.** Viewing a player, a wallet or the audit log itself writes no audit row. They appear in the application log with `request_id` and administrator ID. Whether sensitive reads should be audited is an open question.
-- **Player actions.** They are recorded by the ledgers, settlements, claims and login records.
-- **Worker actions.** They are recorded by job rows and by the `actor_type = 'system'` columns of the rows they write.
+- **读取操作。** 查看玩家、钱包或审计日志本身不会写入审计记录；相关信息记录在包含 `request_id` 和管理员 ID 的应用日志中。是否审计敏感数据读取仍待决定。
+- **玩家操作。** 由资产流水、结算、领取记录和登录记录追踪。
+- **Worker 操作。** 由任务记录及其写入记录中的 `actor_type = 'system'` 字段追踪。
 
-## 3. Content of a record
+## 3. 审计记录内容
 
-| Column | Rule |
+| 列 | 规则 |
 |---|---|
-| `admin_id` | The authenticated administrator. Null only for failed logins of unknown users. |
-| `game_id` | The game acted on. Null for platform-level actions. |
-| `action` | From the tables above. New actions are added to this document first. |
-| `target_type`, `target_id` | The entity acted on |
-| `before_data`, `after_data` | Redacted snapshots or diffs (section 4) |
-| `reason` | Mandatory for high-risk operations |
-| `ticket_id` | Support or change ticket, when there is one |
-| `request_id` | Links the row to application logs and traces |
-| `ip` | Client address as seen at the edge |
-| `created_at` | Server time |
+| `admin_id` | 已认证的管理员。仅当未知用户登录失败时为空 |
+| `game_id` | 操作所属游戏。平台级操作时为空 |
+| `action` | 使用上表中的代码；新增操作代码前先更新本文档 |
+| `target_type`、`target_id` | 被操作的实体 |
+| `before_data`、`after_data` | 脱敏后的快照或差异（见第 4 节） |
+| `reason` | 高风险操作必填 |
+| `ticket_id` | 有支持或变更工单时填写 |
+| `request_id` | 将此记录关联到应用日志和链路追踪 |
+| `ip` | 边缘入口观测到的客户端地址 |
+| `created_at` | 服务端时间 |
 
-## 4. Redaction
+## 4. 脱敏
 
-Never stored in an audit row, in any column:
+审计记录中的任何列都不得保存以下内容：
 
-- passwords and password hashes,
-- access tokens, refresh tokens, challenge tokens,
-- MFA secrets and recovery codes,
-- WeChat AppSecret, `session_key`, service secrets, signing keys,
-- full save content and full config content (store version, checksum and IDs instead).
+- 密码及密码哈希；
+- access token、refresh token、challenge token；
+- MFA 密钥和恢复码；
+- 微信 AppSecret、`session_key`、服务密钥和签名密钥；
+- 完整存档或配置内容（改为保存版本、校验和与 ID）。
 
-Player identifiers (`player_id`, OpenID) may appear where they are the target. Redaction is done by the code that builds the record, with an allowlist of fields per `target_type`, not by a filter applied afterwards. **(proposal)**
+作为目标时可以出现玩家标识（`player_id`、OpenID）。**（提案）** 由构造记录的代码按 `target_type` 的字段允许列表完成脱敏，而非事后再过滤。
 
-## 5. Integrity
+## 5. 完整性
 
-| Control | Detail |
+| 控制 | 说明 |
 |---|---|
-| Same transaction | The audit row commits with the change. If the audit insert fails, the operation fails. There is no "change succeeded, audit lost" outcome. |
-| Append-only by privilege | `gm_api_runtime` has `INSERT` and `SELECT` only; other runtime roles have nothing |
-| Append-only by trigger | `system.reject_mutation()` rejects `UPDATE` and `DELETE` |
-| Ownership | The tables are owned by a `NOLOGIN` role; nobody connects as the owner in normal operation |
-| Failed attempts | Denied requests are not audited rows (nothing changed); they are counted in metrics and logged. Failed logins are the exception (section 2.2). |
+| 同一事务 | 审计记录与变更一起提交。若插入审计记录失败，操作也失败；不存在“变更成功但审计丢失”的情况 |
+| 通过权限只追加 | `gm_api_runtime` 仅有 `INSERT` 和 `SELECT` 权限；其他运行时角色无任何权限 |
+| 通过触发器只追加 | `system.reject_mutation()` 拒绝 `UPDATE` 和 `DELETE` |
+| 对象所有权 | 数据表归 `NOLOGIN` 角色所有；常规操作中无人以所有者身份连接 |
+| 失败尝试 | 被拒绝的请求未更改数据，不写审计记录；改由指标和日志统计。失败登录除外（见第 2.2 节） |
 
-**(proposal)** For stronger tamper evidence, export audit rows daily to object storage with object lock, or chain rows with a hash of the previous row. Neither is required for V1.
+**（提案）** 如需更强的防篡改证据，可每日将审计记录导出到启用对象锁的存储，或使用前一行哈希链接记录。V1 不强制要求。
 
-## 6. Access
+## 6. 访问
 
-- Reading requires `audit.read`. Results are limited to the games the reader is scoped to; platform-level rows need platform scope.
-- `GET /gm/v1/audit-logs` filters by game, administrator, action, target and time, with cursor pagination.
-- Nobody can edit or delete audit rows through any API.
-- Direct database access to the `audit` schema by people follows the production access process and is itself logged by the database.
+- 读取需要 `audit.read` 权限，并限制在读取者获授权的游戏范围内；平台级记录需要平台级授权。
+- `GET /gm/v1/audit-logs` 支持按游戏、管理员、操作、目标和时间过滤，并使用游标分页。
+- 任何 API 都不得编辑或删除审计记录。
+- 人员直接访问 `audit` Schema 必须遵循生产环境访问流程；数据库也会记录该访问。
 
-## 7. Retention
+## 7. 保留期限
 
-Retention periods are not decided; they are an open question in [decisions.md](../architecture/decisions.md) and depend on legal and business requirements.
+保留期限尚未确定，是[决策文档](../architecture/decisions.md)中的待决事项，取决于法律和业务要求。
 
-Until a period is set, audit rows are not deleted. When it is set:
+期限确定前不得删除审计记录。期限确定后：
 
-- rows inside the period are never deleted;
-- older rows are archived to object storage before removal;
-- removal is done by a migration-level procedure run by the owner role, because runtime roles cannot delete and the trigger must be bypassed deliberately.
+- 保留期内的记录绝不删除；
+- 更早的记录须先归档到对象存储，然后才能删除；
+- 删除通过迁移级流程执行，使用对象所有者角色，因为运行时角色无删除权限，且必须有意绕过触发器。
 
-The same applies to the economy ledgers.
+经济流水采用同样策略。
 
-## 8. Review and alerting (proposal)
+## 8. 评审与告警（提案）
 
-| Signal | Action |
+| 信号 | 操作 |
 |---|---|
-| Any `economy.grant` or `economy.deduct` above a per-game threshold | Alert to the game owner |
-| Volume of adjustments by one administrator above a daily threshold | Alert |
-| `rbac.manage`, `admin.manage` | Notify platform owners |
-| `config.publish` | Notify the game channel |
-| Repeated `auth.login_failed` or `auth.mfa_failed` | Alert; lockout applies |
-| Login from a new network for an administrator | Notify that administrator |
-| Weekly | Game owners review high-risk actions in their game |
+| `economy.grant` 或 `economy.deduct` 超过游戏级阈值 | 通知游戏负责人 |
+| 单个管理员的调账次数或金额超过每日阈值 | 告警 |
+| `rbac.manage`、`admin.manage` | 通知平台所有者 |
+| `config.publish` | 通知游戏频道 |
+| 反复出现 `auth.login_failed` 或 `auth.mfa_failed` | 告警；同时执行锁定策略 |
+| 管理员从新网络登录 | 通知该管理员 |
+| 每周检查 | 游戏负责人评审本游戏的高风险操作 |
 
-Thresholds are set per game when the first game goes live.
+首款游戏上线时按游戏设定阈值。
 
-## 9. Tests (T17, T21)
+## 9. 测试（T17、T21）
 
-| Case | Expected |
+| 场景 | 预期结果 |
 |---|---|
-| Each GM mutation in the contract | Exactly one audit row with the right action, target, game and administrator |
-| The mutation fails and rolls back | No audit row |
-| The audit insert is made to fail | The mutation is rolled back |
-| `UPDATE` or `DELETE` on an audit row as any runtime role | Refused |
-| Audit rows after password change, MFA enrollment, game creation | Contain no secret material |
-| `GET /audit-logs` by a game-scoped auditor | Only that game's rows |
+| 契约中的每项 GM 变更 | 恰好一条审计记录，操作、目标、游戏和管理员均正确 |
+| 变更失败并回滚 | 不产生审计记录 |
+| 强制审计记录插入失败 | 变更回滚 |
+| 任一运行时角色尝试 `UPDATE` 或 `DELETE` 审计记录 | 操作被拒绝 |
+| 修改密码、注册 MFA、创建游戏后的审计记录 | 不含任何密钥材料 |
+| 游戏范围内的审计员调用 `GET /audit-logs` | 仅返回该游戏记录 |

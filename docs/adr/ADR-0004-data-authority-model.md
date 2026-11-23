@@ -1,44 +1,44 @@
-# ADR-0004 — Data authority model
+﻿# ADR-0004 — 数据权威模型
 
-- **Status:** Accepted
-- **Date:** 2026-11-23
-- **Supersedes:** ADR-004 and the storage parts of ADR-005 in `docs/architecture/decisions.md` v1.0
-- **Related:** [ADR-0007](ADR-0007-economy-transaction-model.md)
+- **状态：** 已接受
+- **日期：** 2026-11-23
+- **取代：** `docs/architecture/decisions.md` v1.0 中的 ADR-004 及 ADR-005 的存储部分
+- **相关：** [ADR-0007](ADR-0007-economy-transaction-model.md)
 
-## Context
+## 背景
 
-Combat runs on the client to avoid the cost of real-time servers. Anything computed on the client can be forged, so the platform has to state exactly which data the client may influence and which it may not.
+为避免实时服务器成本，战斗在客户端运行。客户端计算结果都可能被伪造，因此平台必须明确客户端可以影响哪些数据、不能影响哪些数据。
 
-## Decision
+## 决策
 
-**The server is authoritative for key data.** Currency balances, items, permanent unlocks and every reward-claim result are decided by the server. The client never submits a balance or a reward amount.
+**关键数据以服务端为权威。** 货币余额、道具、永久解锁内容及所有奖励领取结果均由服务端决定。客户端不得提交余额或奖励数量。
 
-**Client-run combat, server-side settlement.**
+**客户端运行战斗，服务端结算。**
 
-1. `POST /runs` — the server creates the run, generates its ID, and records level, difficulty and rule version.
-2. The client plays the run locally.
-3. `POST /runs/{id}/settlement` — the server validates ownership, state, expiry, costs, reward caps and idempotency, then writes the settlement, the asset changes and the ledger rows in one transaction.
+1. `POST /runs`：服务端创建对局、生成 ID，并记录关卡、难度和规则版本。
+2. 客户端在本地进行对局。
+3. `POST /runs/{id}/settlement`：服务端校验所有权、状态、过期时间、消耗、奖励上限及幂等性，然后在同一事务中写入结算、资产变更和流水。
 
-- A run can be settled once; duplicates are rejected by a unique constraint.
-- Client-reported `score`, `is_win` and `reward` are untrusted inputs. The server cannot prove from them that the combat happened.
-- The first game uses lightweight validation and conservative reward caps. Server-side replay verification is considered for high-value modes. Abnormal scores and rapid repeated clears feed risk control. No combat server is built in V1.
+- 每场对局只能结算一次；重复请求由唯一约束拒绝。
+- 客户端上报的 `score`、`is_win` 和 `reward` 均不可信。服务端无法据此证明战斗真实发生。
+- 首款游戏采用轻量校验和保守奖励上限。高价值玩法可考虑服务端回放验证。异常分数和短时间内反复通关会进入风控；V1 不构建战斗服务器。
 
-**Saves are not assets.**
+**存档不是资产。**
 
-- `player_saves` holds non-critical game state as versioned JSONB with optimistic locking (`If-Match` on `save_version`).
-- Currency, items and paid entitlements live in dedicated tables. A client cannot change authoritative assets by submitting a save.
-- Profile, permanent progress, current save and save history are managed separately; the platform does not put all game data into one JSONB document.
+- `player_saves` 使用带版本的 JSONB 保存非关键游戏状态，并通过乐观锁控制并发（对 `save_version` 使用 `If-Match`）。
+- 货币、道具和付费权益存放在专用表中。客户端提交存档不能改变权威资产。
+- 玩家资料、永久进度、当前存档和存档历史分别管理；平台不把所有游戏数据放进一个 JSONB 文档。
 
-**Ad rewards.** The WeChat client callback `onClose({ isEnded: true })` shows only that the client observed completion. The server creates an ad session, enforces expiry, ownership, placement, daily limits and single claim, and records abnormal behaviour. Without a verifiable server-side callback from the ad platform, cheating cannot be fully prevented, and reward values are sized with that in mind.
+**广告奖励。** 微信客户端的 `onClose({ isEnded: true })` 回调只表示客户端观察到广告播放完成。服务端负责创建广告会话，并校验过期时间、所有权、广告位、每日限额和单次领取，同时记录异常行为。若广告平台没有可验证的服务端回调，就无法彻底防止作弊，因此奖励额度应按这一风险审慎设定。
 
-**Storage authority.**
+**存储权威。**
 
-- PostgreSQL is the authoritative store for all business data, including leaderboards.
-- Redis holds cache, rate limits and leaderboard read acceleration. Losing Redis must not change ownership or balances. Redis locks never replace database transactions and unique constraints.
-- S3/OSS + CDN hold large config payloads and assets. PostgreSQL holds their metadata, checksums and release state.
+- PostgreSQL 是所有业务数据（包括排行榜）的权威存储。
+- Redis 用于缓存、限流和排行榜读取加速。Redis 丢失不得改变资产所有权或余额。Redis 锁不能取代数据库事务和唯一约束。
+- S3/OSS + CDN 存储大型配置负载和资源；PostgreSQL 保存其元数据、校验和及发布状态。
 
-## Consequences
+## 后果
 
-- Anti-cheat is bounded, not complete; product design has to keep the value of client-earned rewards within what the caps can protect.
-- Every reward path goes through the economy service (ADR-0007), which adds a transaction to each claim.
-- Multi-device play can produce `SAVE_VERSION_CONFLICT`; the client must handle a reload-and-merge path.
+- 反作弊能力有限，无法做到完全防护；产品设计必须将客户端所得奖励控制在限额可保护的范围内。
+- 所有奖励路径都经过经济服务（ADR-0007），每次领取都需要事务处理。
+- 多设备同时游玩可能产生 `SAVE_VERSION_CONFLICT`；客户端必须支持重新加载并合并存档。

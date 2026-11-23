@@ -1,74 +1,74 @@
-# Internal API guide
+﻿# 内部 API 指南
 
-- **Status:** Draft for review (2026-11-23). **The service is reserved and not deployed in V1.**
-- **Contract:** [`api/openapi/internal-api.yaml`](../../api/openapi/internal-api.yaml) is the source of truth.
-- **Related:** [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md), [async-job-design.md](../architecture/async-job-design.md), [authentication-and-authorization.md](../architecture/authentication-and-authorization.md)
+- **状态：** 评审草案（2026-11-23）。**该服务仅作预留，V1 不部署。**
+- **契约：** [`api/openapi/internal-api.yaml`](../../api/openapi/internal-api.yaml) 是事实来源。
+- **相关：** [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)、[异步任务设计](../architecture/async-job-design.md)、[认证与授权](../architecture/authentication-and-authorization.md)
 
-Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. What it is and is not
+## 1. 它是什么、又不是什么
 
-| It is | It is not |
+| 它是 | 它不是 |
 |---|---|
-| The entry for machine-to-machine calls into platform business logic | A second GM API |
-| A contract kept ready so it can be enabled without changing `gamecore` | A third copy of business logic |
-| Reachable from the private network only | The way `game-worker` talks to `gamecore` in V1 |
-| | The place for third-party platform callbacks |
+| 机器到机器访问平台业务逻辑的入口 | 第二套 GM API |
+| 预先保留的契约，启用时无需修改 `gamecore` | 第三份业务逻辑副本 |
+| 仅可从私有网络访问 | V1 中 `game-worker` 调用 `gamecore` 的方式 |
+| | 第三方平台回调的入口 |
 
-In V1, `game-worker` is part of the same Go module and calls `gamecore` in-process. Routing those calls through HTTP would add a network hop and a failure mode for no gain.
+V1 中，`game-worker` 与平台处于同一 Go 模块，并在进程内调用 `gamecore`。若改为通过 HTTP 调用，只会增加网络跳转和故障模式，没有实际收益。
 
-## 2. When to deploy it
+## 2. 部署时机
 
-Deploy `internal-api` when one of these becomes true:
+出现以下任一情况时，再部署 `internal-api`：
 
-- A worker or scheduler is built outside this module or in another language.
-- Another internal system (data pipeline, operations tooling, a second backend) needs to trigger platform operations.
-- Job execution must be isolated in a different network zone from the database.
+- Worker 或调度器在本模块之外构建，或使用其他语言实现。
+- 其他内部系统（数据流水线、运营工具、第二套后端）需要触发平台操作。
+- 任务执行需要与数据库隔离到不同网络区域。
 
-Until then V1 keeps three things: the directory `services/internal-api`, the `internal/security/serviceauth` abstraction, and the contract.
+在此之前，V1 只保留三项：`services/internal-api` 目录、`internal/security/serviceauth` 抽象和 API 契约。
 
-## 3. Operations in the contract
+## 3. 契约中的操作
 
-| Group | Operation | Permission code | Purpose |
+| 分组 | 操作 | 权限代码 | 用途 |
 |---|---|---|---|
-| Jobs | `POST /internal/v1/jobs/{job_id}/claim` | `job.execute` | Take a lease on a pending job |
-| Jobs | `POST /internal/v1/jobs/{job_id}/heartbeat` | `job.execute` | Extend the lease |
-| Jobs | `POST /internal/v1/jobs/{job_id}/complete` | `job.execute` | Mark success |
-| Jobs | `POST /internal/v1/jobs/{job_id}/fail` | `job.execute` | Report failure; the server chooses retry or fail |
-| Mail | `POST /internal/v1/mail-deliveries/execute` | `mail.deliver` | Deliver one batch of a mail |
-| Rewards | `POST /internal/v1/reward-jobs/execute` | `reward.execute` | Grant one batch of a reward job |
-| Analytics | `POST /internal/v1/events/batch` | `event.write` | Write events from a trusted producer |
-| Config | `POST /internal/v1/config-releases/notify` | `config.notify` | Request cache and CDN refresh for a release |
-| Maintenance | `POST /internal/v1/maintenance/tasks` | `maintenance.run` | Enqueue an allowlisted maintenance task |
+| 任务 | `POST /internal/v1/jobs/{job_id}/claim` | `job.execute` | 为待处理任务获取租约 |
+| 任务 | `POST /internal/v1/jobs/{job_id}/heartbeat` | `job.execute` | 延长租约 |
+| 任务 | `POST /internal/v1/jobs/{job_id}/complete` | `job.execute` | 标记任务成功 |
+| 任务 | `POST /internal/v1/jobs/{job_id}/fail` | `job.execute` | 上报失败，由服务端决定重试或终止 |
+| 邮件 | `POST /internal/v1/mail-deliveries/execute` | `mail.deliver` | 投递一批邮件 |
+| 奖励 | `POST /internal/v1/reward-jobs/execute` | `reward.execute` | 执行奖励任务的一批发放 |
+| 分析 | `POST /internal/v1/events/batch` | `event.write` | 写入可信生产者发来的事件 |
+| 配置 | `POST /internal/v1/config-releases/notify` | `config.notify` | 请求刷新某次发布对应的缓存和 CDN |
+| 维护 | `POST /internal/v1/maintenance/tasks` | `maintenance.run` | 将允许列表中的维护任务加入队列 |
 
-The permission codes are service permissions stored in `system.service_game_grants`. They are a separate vocabulary from the GM permission codes in `admin.permissions`; the names were chosen for this contract and are a **proposal**.
+这些权限代码是存储于 `system.service_game_grants` 的服务权限，与 `admin.permissions` 中的 GM 权限代码分属不同命名体系；本契约选用的名称属于**提案**。
 
-Two properties keep this from turning into a GM API:
+以下两项设计可避免该 API 演变为 GM API：
 
-- A caller never supplies the reward. `reward-jobs/execute` takes a reward job ID and player IDs; what is granted was fixed by the operator who created the job.
-- `maintenance/tasks` accepts only the listed task types.
+- 调用方不得自行提交奖励内容。`reward-jobs/execute` 接受奖励任务 ID 和玩家 ID；发放内容由创建任务的运营人员预先确定。
+- `maintenance/tasks` 仅接受列出的任务类型。
 
-The contract takes a job ID for `claim`. A polling worker also needs a way to ask for "the next job of types I handle"; that operation is not in the design table and is an open point for the day the service is built.
+契约中的 `claim` 操作要求传入任务 ID。轮询 Worker 还需要能够请求“下一个属于我处理类型的任务”；设计表中尚未定义此操作，待服务开始建设时决定。
 
-## 4. Requirements when deployed
+## 4. 部署后的要求
 
-| Requirement | Mechanism |
+| 要求 | 实现方式 |
 |---|---|
-| Private network only | Listener on the internal network; no route from the public edge; firewall or security group rules |
-| Independent service identity | `system.service_identities` |
-| Authentication | HMAC AK/SK signature (`X-Access-Key`, `X-Signature`) or mTLS |
-| Replay protection | `X-Timestamp` within the allowed skew and a single-use `X-Nonce` |
-| Authorization per service | Operation permission code checked against the caller's grants |
-| Game scope | The request `game_id` must match a row in `system.service_game_grants` |
-| Idempotency | `Idempotency-Key` on every mutation |
-| Audit | One `audit.service_audit_logs` row per call, including denied ones |
-| Rate limiting | Per service identity |
+| 仅限私有网络 | 监听内网；公网入口不可路由到此服务；配置防火墙或安全组规则 |
+| 独立服务身份 | `system.service_identities` |
+| 认证 | HMAC AK/SK 签名（`X-Access-Key`、`X-Signature`）或 mTLS |
+| 防重放 | `X-Timestamp` 必须在允许的时钟偏差范围内，`X-Nonce` 仅可使用一次 |
+| 按服务授权 | 根据调用方授权检查操作权限代码 |
+| 游戏范围 | 请求中的 `game_id` 必须与 `system.service_game_grants` 中的记录一致 |
+| 幂等性 | 每个变更请求都必须携带 `Idempotency-Key` |
+| 审计 | 每次调用均写入一条 `audit.service_audit_logs`，包括被拒绝的调用 |
+| 限流 | 按服务身份限流 |
 
-The private network is defence in depth. It does not replace authentication.
+私有网络是纵深防御措施，不能取代认证。
 
-### HMAC signing (proposal)
+### HMAC 签名（提案）
 
-The contract says the request is signed with HMAC-SHA256 over method, path, query, timestamp, nonce and body hash. The exact canonical string is fixed when the service is first built. A workable form:
+契约规定使用 HMAC-SHA256 对请求方法、路径、查询参数、时间戳、nonce 和请求体哈希签名。服务首次构建时确定规范字符串。可采用以下格式：
 
 ```text
 string_to_sign = METHOD + "\n" + PATH + "\n" + CANONICAL_QUERY + "\n"
@@ -76,26 +76,26 @@ string_to_sign = METHOD + "\n" + PATH + "\n" + CANONICAL_QUERY + "\n"
 X-Signature    = hex(hmac_sha256(secret, string_to_sign))
 ```
 
-Allowed clock skew: 5 minutes. Nonces are remembered for the skew window in Redis; if Redis is unavailable, requests are rejected rather than accepted unchecked.
+允许的时钟偏差为 5 分钟。nonce 在此时间窗口内存储于 Redis；若 Redis 不可用，应拒绝请求，而不是跳过校验后放行。
 
-The secret is read from the secret manager through `service_credentials.secret_ref`. It cannot be stored as a one-way hash, because the server must recompute the signature.
+密钥通过 `service_credentials.secret_ref` 从密钥管理器读取。由于服务端必须重新计算签名，不能将密钥保存为单向哈希。
 
 ## 5. Actor
 
-A verified call becomes an `Actor` with `Type = "service"`, `ID` = the service identity, `Service` = its code and `GameID` = the granted game. `gamecore` treats it like any other caller: the same services, the same checks, the same ledger and audit columns.
+验证通过的调用会转换为 `Actor`：`Type = "service"`，`ID` 为服务身份，`Service` 为其代码，`GameID` 为授权的游戏。`gamecore` 按照与其他调用方相同的方式处理：使用相同服务、校验逻辑、流水和审计字段。
 
-## 6. Enabling checklist
+## 6. 启用检查清单
 
-- [ ] Re-read and re-lint the contract; it may have drifted while unused.
-- [ ] Add the "next job" operation if a polling worker needs it.
-- [ ] Fix the canonical signing string and publish a client helper.
-- [ ] Create the `internal_api_runtime` database role and its grants.
-- [ ] Create service identities, credentials and game grants through a reviewed process.
-- [ ] Confirm from outside the private network that no `/internal/` route answers.
-- [ ] Add tests for a bad signature, a stale timestamp, a replayed nonce, a missing grant and a wrong game.
-- [ ] Add dashboards and alerts for denied calls.
-- [ ] Record the decision in an amendment to ADR-0008.
+- [ ] 重新评审并执行契约 lint；契约可能在未使用期间发生偏移。
+- [ ] 若轮询 Worker 需要，补充“领取下一个任务”操作。
+- [ ] 确定规范签名字符串并发布客户端辅助库。
+- [ ] 创建 `internal_api_runtime` 数据库角色及授权。
+- [ ] 通过经过评审的流程创建服务身份、凭据和游戏授权。
+- [ ] 从私有网络外部确认 `/internal/` 路由无法访问。
+- [ ] 为错误签名、过期时间戳、重放 nonce、缺少授权和错误游戏添加测试。
+- [ ] 为被拒绝的调用添加仪表盘和告警。
+- [ ] 通过修订 ADR-0008 记录该决策。
 
-## 7. Third-party callbacks
+## 7. 第三方回调
 
-Calls from WeChat or ad platforms are not internal calls. They arrive from the public internet, use the platform's own signature scheme, and live under `/platform-callbacks/v1`. See [service-boundaries.md](../architecture/service-boundaries.md#5-third-party-callbacks).
+来自微信或广告平台的请求不是内部调用。它们从公网到达，使用平台自有签名机制，路由前缀为 `/platform-callbacks/v1`。详见[服务边界](../architecture/service-boundaries.md#5-third-party-callbacks)。

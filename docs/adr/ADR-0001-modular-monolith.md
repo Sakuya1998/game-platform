@@ -1,35 +1,35 @@
-# ADR-0001 — Modular monolith with independently deployed entrypoints
+﻿# ADR-0001 — 模块化单体与独立部署入口
 
-- **Status:** Accepted
-- **Date:** 2026-11-23
-- **Supersedes:** ADR-001 in `docs/architecture/decisions.md` v1.0
-- **Related:** [ADR-0005](ADR-0005-api-service-boundaries.md), [ADR-0008](ADR-0008-internal-api-and-worker.md)
+- **状态：** 已接受
+- **日期：** 2026-11-23
+- **取代：** `docs/architecture/decisions.md` v1.0 中的 ADR-001
+- **相关：** [ADR-0005](ADR-0005-api-service-boundaries.md)、[ADR-0008](ADR-0008-internal-api-and-worker.md)
 
-## Context
+## 背景
 
-The platform serves several small games from one backend. The first release targets WeChat Mini Games with a small team. Player traffic and GM operations have different attack surfaces, release cadences and scaling needs, but they act on the same business rules and the same data. Splitting domains into networked microservices now would add distributed transactions, service discovery and operational cost without a measured need.
+平台通过一个后端服务多款小游戏。首个版本面向微信小游戏，团队规模较小。玩家流量和 GM 运营具有不同的攻击面、发布节奏和扩缩容需求，但它们依赖相同的业务规则和数据。当前将领域拆成网络隔离的微服务，会引入分布式事务、服务发现和运维成本，而尚无实际需求支撑。
 
-## Decision
+## 决策
 
-- Build one Go module at the repository root (monorepo, no `go.work`).
-- All business rules live once, in the shared `internal/gamecore` packages (domain, application services, repositories).
-- Ship several process entrypoints from that module, each with its own image, configuration and lifecycle:
+- 在仓库根目录创建单一 Go 模块（单体仓库，不使用 `go.work`）。
+- 所有业务规则只实现一次，放在共享的 `internal/gamecore` 包中（领域、应用服务、Repository）。
+- 从该模块构建多个进程入口，每个入口拥有独立镜像、配置和生命周期：
 
-  | Entrypoint | Audience | V1 deployment |
+  | 入口 | 使用方 | V1 部署情况 |
   |---|---|---|
-  | `game-api` | Player clients | Deployed |
-  | `gm-api` | GM Web | Deployed |
-  | `game-worker` | Background jobs | Deployed when asynchronous work exists (it does in V1: batch mail and rewards) |
-  | `internal-api` | Trusted services | Reserved; not deployed |
+  | `game-api` | 玩家客户端 | 部署 |
+  | `gm-api` | GM Web 管理端 | 部署 |
+  | `game-worker` | 后台任务 | 存在异步任务时部署（V1 已有批量邮件和奖励任务） |
+  | `internal-api` | 可信服务 | 预留，不部署 |
 
-- Entrypoints call `gamecore` in-process. No entrypoint calls another entrypoint over HTTP.
-- Handlers, routers, authentication middleware and DTOs are per entrypoint and are not shared. Domain, application services and repositories are shared.
-- No Kafka, RocketMQ, service registry, microservice gateway or distributed transactions in V1.
-- Start on Docker Compose; keep images and configuration portable to Kubernetes.
+- 各入口在进程内调用 `gamecore`。入口之间不得通过 HTTP 相互调用。
+- Handler、路由、认证中间件和 DTO 按入口分别维护，不共享；领域、应用服务和 Repository 共享。
+- V1 不引入 Kafka、RocketMQ、服务注册中心、微服务网关或分布式事务。
+- 首先使用 Docker Compose；镜像和配置应保持可移植，以便未来使用 Kubernetes。
 
-## Consequences
+## 后果
 
-- A domain change can require rebuilding and redeploying every entrypoint.
-- `gamecore` must not import Gin or any transport type; transport concerns stay in `internal/transport/http/*`.
-- Every application-service call carries an explicit `Actor` (see ADR-0005), because the same service is reachable from different security planes.
-- A domain is split into its own service only when independent scaling, ownership or isolation is demonstrated, and only through a new ADR.
+- 领域变更可能要求重新构建并部署所有入口。
+- `gamecore` 不得导入 Gin 或任何传输层类型；传输相关逻辑留在 `internal/transport/http/*`。
+- 每次应用服务调用都必须携带显式 `Actor`（参见 ADR-0005），因为不同安全平面都可能访问同一服务。
+- 只有在证明需要独立扩缩容、所有权或隔离后，才可将领域拆为独立服务，并须新增 ADR。

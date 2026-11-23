@@ -1,48 +1,48 @@
-# Asynchronous job design
+﻿# 异步任务设计
 
-- **Status:** Draft for review (2026-11-23)
-- **Elaborates:** [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md), [ADR-0009](../adr/ADR-0009-async-job-model.md)
-- **Source:** section 8 of the [technical design](../game-platform-technical-design.md); tables `system.background_jobs`, `system.outbox_events`, `operation.reward_jobs` in [schema.sql](../database/schema.sql)
+- **状态：** 评审草案（2026-11-23）
+- **细化：** [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)、[ADR-0009](../adr/ADR-0009-async-job-model.md)
+- **来源：** [技术设计](../game-platform-technical-design.md)第 8 节；[schema.sql](../database/schema.sql) 中的 `system.background_jobs`、`system.outbox_events`、`operation.reward_jobs` 表
 
-Where this document and an ADR disagree, the ADR wins. Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+若本文档与 ADR 冲突，以 ADR 为准。标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. What runs asynchronously
+## 1. 异步处理范围
 
-Batch mail delivery, batch reward grants, statistics, leaderboard rebuilds, expired-data cleanup, save snapshots, config cache refresh, and retries of failed tasks. None of these runs inside an HTTP request.
+批量邮件投递、批量奖励发放、统计、排行榜重建、过期数据清理、存档快照、配置缓存刷新和失败任务重试。以上工作均不得在 HTTP 请求中执行。
 
-V1 uses PostgreSQL as the queue. There is no message broker.
+V1 使用 PostgreSQL 作为任务队列，不使用消息代理。
 
-## 2. Parts
+## 2. 组成部分
 
-| Part | Table or process | Purpose |
+| 部分 | 数据表或进程 | 用途 |
 |---|---|---|
-| Job queue | `system.background_jobs` | Work to execute, with state, retries and lease |
-| Outbox | `system.outbox_events` | Events that must be published if and only if a business transaction committed |
-| Business record of a batch | `operation.reward_jobs` | What the operator asked for, with progress counters; points at its background job |
-| Executor | `game-worker` | Claims jobs, calls `gamecore` in-process |
+| 任务队列 | `system.background_jobs` | 保存待执行工作、状态、重试信息和租约 |
+| Outbox | `system.outbox_events` | 仅当业务事务提交后才需要发布的事件 |
+| 批处理业务记录 | `operation.reward_jobs` | 记录运营人员的请求和进度计数，并关联后台任务 |
+| 执行器 | `game-worker` | 领取任务并在进程内调用 `gamecore` |
 
-A job or outbox row is inserted in the same transaction as the business change that causes it. If the transaction rolls back, the job does not exist.
+任务或 Outbox 记录与触发它们的业务变更在同一事务中插入。若事务回滚，任务也不会存在。
 
-## 3. Job states
+## 3. 任务状态
 
 ```mermaid
 stateDiagram-v2
   [*] --> pending
-  pending --> running: claim
-  running --> succeeded: complete
-  running --> retrying: fail, retries left
-  running --> failed: fail, no retries left
-  running --> retrying: lease expired
-  retrying --> running: claim after backoff
-  pending --> cancelled: cancel
-  retrying --> cancelled: cancel
-  failed --> pending: manual retry
+  pending --> running: 领取
+  running --> succeeded: 完成
+  running --> retrying: 失败，仍有重试次数
+  running --> failed: 失败，重试次数耗尽
+  running --> retrying: 租约过期
+  retrying --> running: 退避后重新领取
+  pending --> cancelled: 取消
+  retrying --> cancelled: 取消
+  failed --> pending: 手动重试
   succeeded --> [*]
   failed --> [*]
   cancelled --> [*]
 ```
 
-## 4. Claiming
+## 4. 领取任务
 
 ```sql
 UPDATE system.background_jobs
@@ -61,90 +61,90 @@ WHERE id = (
 RETURNING *;
 ```
 
-`SKIP LOCKED` lets several worker instances claim without blocking each other. The partial index `background_jobs_claim_idx` serves the inner query.
+`SKIP LOCKED` 允许多个 Worker 实例并发领取而不互相阻塞。部分索引 `background_jobs_claim_idx` 用于加速内部查询。
 
-## 5. Lease, heartbeat, reclaim
+## 5. 租约、心跳与重新领取
 
-- A claim sets a lease **(proposal: 60 seconds)**.
-- The worker refreshes `heartbeat_at` and `lease_expires_at` while it works **(proposal: every 20 seconds)**.
-- A reaper pass in every worker moves `running` jobs whose lease expired back to `retrying` and increments `retry_count`. A crashed worker therefore loses its jobs after one lease period.
-- A worker that discovers it lost its lease stops and does not mark the job complete.
+- 领取任务时设置租约（**提案：** 60 秒）。
+- Worker 执行期间刷新 `heartbeat_at` 和 `lease_expires_at`（**提案：** 每 20 秒一次）。
+- 每个 Worker 都会运行清理检查，将租约过期的 `running` 任务改为 `retrying`，并递增 `retry_count`。Worker 崩溃后，最多经过一个租约周期就会释放任务。
+- Worker 发现自己已失去租约时，应停止处理，且不得将任务标记为完成。
 
-## 6. Retry and backoff
+## 6. 重试与退避
 
-- `max_retries` is per job (default 5 in the schema).
-- **(proposal)** Backoff: `run_at = now() + min(base × 2^retry_count, cap)` with `base = 10 s`, `cap = 15 min`, plus up to 20% jitter.
-- A failure stores `last_error`. When `retry_count` reaches `max_retries` the job becomes `failed`.
-- Errors that cannot succeed on retry (validation failures, missing targets) fail immediately.
-- An operator can retry a failed job or cancel a pending one from the GM console. Both are audited. The design lists manual retry as a capability; the GM API has no endpoint for it yet.
+- 每个任务独立设置 `max_retries`（Schema 默认值为 5）。
+- **（提案）** 退避规则：`run_at = now() + min(base × 2^retry_count, cap)`，其中 `base = 10 s`、`cap = 15 min`，再加入最多 20% 的抖动。
+- 失败时保存 `last_error`。当 `retry_count` 达到 `max_retries` 时，任务状态改为 `failed`。
+- 不可能通过重试成功的错误（如校验失败、目标缺失）应立即失败。
+- 运营人员可在 GM 控制台重试失败任务或取消待处理任务；两项操作都需审计。设计要求支持手动重试，但 GM API 尚无对应端点。
 
-## 7. Idempotent execution
+## 7. 幂等执行
 
-Delivery is at-least-once. Every handler must give the same result when run twice.
+投递语义为至少一次。每个处理器重复执行时都必须产生相同结果。
 
-| Job | How a repeat becomes a no-op |
+| 任务 | 重复执行时不产生副作用的机制 |
 |---|---|
-| Mail delivery | `UNIQUE (game_id, mail_id, player_id)` on `operation.player_mail`; insert with `ON CONFLICT DO NOTHING` |
-| Batch reward | Ledger unique key with `source_type = 'reward_job'`, `source_id` = reward job ID |
-| Statistics | Upsert on `(game_id, stat_date)` or `(game_id, stat_date, player_id)` |
-| Leaderboard snapshot | `UNIQUE (game_id, board_id, period_key)` |
-| Save snapshot | `UNIQUE (game_id, player_id, save_version)` |
-| Cleanup | Deleting already-deleted rows changes nothing |
-| Enqueue | `background_jobs_dedupe_uniq` on `(job_type, dedupe_key)` stops the same job being queued twice |
+| 邮件投递 | `operation.player_mail` 上的 `UNIQUE (game_id, mail_id, player_id)`；使用 `ON CONFLICT DO NOTHING` 插入 |
+| 批量奖励 | 流水唯一键，`source_type = 'reward_job'`，`source_id` 为奖励任务 ID |
+| 统计 | 对 `(game_id, stat_date)` 或 `(game_id, stat_date, player_id)` 执行 upsert |
+| 排行榜快照 | `UNIQUE (game_id, board_id, period_key)` |
+| 存档快照 | `UNIQUE (game_id, player_id, save_version)` |
+| 清理 | 删除已删除的行不会造成额外变化 |
+| 入队 | `(job_type, dedupe_key)` 上的 `background_jobs_dedupe_uniq` 防止相同任务重复入队 |
 
-## 8. Large batches
+## 8. 大批量任务
 
-A batch over many players is one job that works in pages, not one job per player.
+涉及大量玩家的批处理使用一个任务分页执行，而不是每位玩家创建一个任务。
 
-1. The job payload holds the target definition and a cursor (last processed player ID).
-2. Each iteration loads a page **(proposal: 500 players)**, processes it in one transaction, updates the cursor in the job payload and the counters on `operation.reward_jobs`, then heartbeats.
-3. After a crash the next claimant resumes from the stored cursor. Players of the interrupted page are re-attempted and deduplicated by the keys above.
+1. 任务载荷保存目标定义和游标（上次处理的玩家 ID）。
+2. 每轮载入一页（**提案：** 500 名玩家），在一个事务中处理；更新任务载荷中的游标和 `operation.reward_jobs` 计数器，然后发送心跳。
+3. 崩溃后，下一个领取者从已保存的游标继续。中断页中的玩家会再次尝试处理，并由上述幂等键去重。
 
-`reward_jobs.target_count`, `processed_count` and `failed_count` give the operator a progress view.
+`reward_jobs.target_count`、`processed_count` 和 `failed_count` 用于向运营人员展示进度。
 
-## 9. Job catalogue
+## 9. 任务目录
 
-| `job_type` | Created by | Notes |
+| `job_type` | 创建方 | 说明 |
 |---|---|---|
-| `mail_delivery` | `gm-api`, on mail send | Linked from `reward_jobs` |
-| `batch_reward` | `gm-api` | Linked from `reward_jobs` |
-| `compensation` | `gm-api` | Linked from `reward_jobs` |
-| `stats_aggregation` | Scheduler | Fills `analytics.daily_game_stats` and `daily_player_stats` |
-| `leaderboard_rebuild` | Scheduler or operator | Rebuilds the Redis read model from `leaderboard_entries`; writes period snapshots |
-| `save_snapshot` | Scheduler | Writes `player_save_snapshots` |
-| `expired_data_cleanup` | Scheduler | Expired sessions, idempotency keys, ad sessions, finished jobs past retention |
-| `config_cache_refresh` | Outbox, on config release | Refreshes caches and CDN |
+| `mail_delivery` | `gm-api`，发送邮件时 | 由 `reward_jobs` 关联 |
+| `batch_reward` | `gm-api` | 由 `reward_jobs` 关联 |
+| `compensation` | `gm-api` | 由 `reward_jobs` 关联 |
+| `stats_aggregation` | 调度器 | 填充 `analytics.daily_game_stats` 和 `daily_player_stats` |
+| `leaderboard_rebuild` | 调度器或运营人员 | 从 `leaderboard_entries` 重建 Redis 读取模型，并写入周期快照 |
+| `save_snapshot` | 调度器 | 写入 `player_save_snapshots` |
+| `expired_data_cleanup` | 调度器 | 清理过期会话、幂等键、广告会话及超过保留期的已结束任务 |
+| `config_cache_refresh` | 配置发布时的 Outbox | 刷新缓存和 CDN |
 
-The first three match the `job_type` check on `operation.reward_jobs`; the last five match the task types of `POST /internal/v1/maintenance/tasks`.
+前三项与 `operation.reward_jobs` 的 `job_type` 检查约束一致；后五项与 `POST /internal/v1/maintenance/tasks` 的任务类型一致。
 
-**(proposal)** Scheduling is done inside `game-worker`: a small scheduler enqueues recurring jobs with a `dedupe_key` such as `stats_aggregation:2026-11-23`, so several worker instances cannot enqueue the same run twice.
+**（提案）** 由 `game-worker` 内部调度：轻量调度器使用 `stats_aggregation:2026-11-23` 等 `dedupe_key` 入队周期任务，避免多个 Worker 实例重复入队。
 
 ## 10. Outbox
 
-- A business transaction inserts an `outbox_events` row (`aggregate_type`, `aggregate_id`, `event_type`, `payload`).
-- The worker polls unpublished rows ordered by `next_attempt_at`, handles each one (in V1: enqueue a job or refresh a cache), then sets `published_at`.
-- A failed attempt increments `attempts`, stores `last_error` and pushes `next_attempt_at` forward with the same backoff as jobs.
-- Consumers must tolerate a repeated event.
+- 业务事务插入一条 `outbox_events` 记录（`aggregate_type`、`aggregate_id`、`event_type`、`payload`）。
+- Worker 按 `next_attempt_at` 顺序轮询未发布记录并逐条处理（V1 中用于创建任务或刷新缓存），随后设置 `published_at`。
+- 失败时递增 `attempts`，保存 `last_error`，并按任务相同的退避规则推迟 `next_attempt_at`。
+- 消费方必须能够处理重复事件。
 
-In V1 the outbox has no external subscriber. It exists so that "the release committed" and "the cache refresh was requested" cannot diverge, and so a broker can be attached later without changing business code.
+V1 中 Outbox 没有外部订阅方。设置 Outbox 是为了确保“配置发布已提交”和“缓存刷新已请求”不会产生状态分歧或丢失；未来接入消息代理时，无需更改业务代码。
 
-## 11. Worker and internal API
+## 11. Worker 与内部 API
 
-`game-worker` calls `gamecore` directly. It does not use `internal-api`, which is not deployed in V1. The job-control operations in `internal-api.yaml` (`claim`, `heartbeat`, `complete`, `fail`) describe the same state machine for a future worker that lives outside this module.
+`game-worker` 直接调用 `gamecore`。它不使用 V1 未部署的 `internal-api`。`internal-api.yaml` 中的任务控制操作（`claim`、`heartbeat`、`complete`、`fail`）为未来部署在本模块之外的 Worker 描述相同的状态机。
 
-## 12. Operations
+## 12. 运维指标
 
-| Metric | Why |
+| 指标 | 用途 |
 |---|---|
-| Queue depth by `job_type` and status | Backlog |
-| Age of the oldest `pending` or `retrying` job | Stuck queue |
-| Execution time by `job_type` | Sizing leases and pages |
-| Failures and retries by `job_type` | Bad handlers or bad data |
-| Reclaimed leases | Crashing or overloaded workers |
-| Unpublished outbox rows and the age of the oldest | Stuck outbox |
+| 按 `job_type` 和状态统计的队列深度 | 监控积压 |
+| 最早的 `pending` 或 `retrying` 任务的等待时间 | 发现队列停滞 |
+| 按 `job_type` 统计的执行时间 | 调整租约和分页大小 |
+| 按 `job_type` 统计的失败与重试次数 | 发现处理器或数据问题 |
+| 被重新领取的租约数量 | 发现 Worker 崩溃或过载 |
+| 未发布 Outbox 记录数及最早记录的等待时间 | 发现 Outbox 停滞 |
 
-Finished jobs and published outbox rows are deleted by `expired_data_cleanup` after a retention period **(proposal: 30 days)**. Polling adds seconds of latency **(proposal: poll every 2 seconds when idle)**, which is acceptable for these job types.
+完成的任务和已发布的 Outbox 记录在保留期后由 `expired_data_cleanup` 删除（**提案：** 30 天）。轮询会增加数秒延迟（**提案：** 空闲时每 2 秒轮询一次）；对这些任务类型可以接受。
 
-## 13. When this stops being enough
+## 13. 扩展条件
 
-A broker is introduced only when measured throughput, latency or fan-out exceeds what polling supports, and through a new ADR.
+只有当实测吞吐量、延迟或扇出规模超过轮询能力时，才通过新 ADR 引入消息代理。

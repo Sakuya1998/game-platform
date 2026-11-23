@@ -1,31 +1,31 @@
-# Game Platform — Architecture overview and ADR index
+# 游戏平台 — 架构概览与 ADR 索引
 
-**Status:** Accepted baseline  
-**Version:** 2.0 (replaces 1.0)  
-**Date:** 2026-11-23  
-**Scope:** V1 for WeChat Mini Games, with multi-platform extension points.
+**状态：** 已接受的基线
+**版本：** 2.0（取代 1.0）
+**日期：** 2026-11-23
+**范围：** 面向微信小游戏的 V1，并预留多平台扩展点。
 
-The decisions themselves now live in one file per ADR under [`docs/adr/`](../adr/). This document keeps the cross-cutting overview and the index. The full design narrative is in the [technical design](../game-platform-technical-design.md).
+具体决策现按 ADR 分别存放于 [`docs/adr/`](../adr/)。本文保留跨领域概览和索引。完整设计说明见[技术设计](../game-platform-technical-design.md)。
 
-## 1. Context and goals
+## 1. 背景与目标
 
-Build a reusable backend and operations platform for multiple small games. The first release supports WeChat Mini Games. Every game has its own player account namespace. The server is authoritative for key data; moment-to-moment combat runs on the client. V1 delivers the player API, the GM API, a complete GM platform (administrators, RBAC, player and economy management, config centre, mail, activities, audit, basic operations data) and a background worker.
+构建可复用的后端和运营平台，为多款小游戏提供服务。首个版本支持微信小游戏。每款游戏拥有独立的玩家账号命名空间。关键数据以服务端为权威；即时战斗由客户端运行。V1 提供玩家 API、GM API、完整 GM 平台（管理员、RBAC、玩家和经济管理、配置中心、邮件、活动、审计、基础运营数据）及后台 Worker。
 
-Non-goals for V1: payments, real-time combat servers, cross-game shared player accounts, microservice-per-domain deployment, a message broker (Kafka / RocketMQ), and Kubernetes.
+V1 不包含：支付、实时战斗服务器、跨游戏共享玩家账号、按领域拆分并独立部署的微服务、消息代理（Kafka / RocketMQ）和 Kubernetes。
 
-## 2. What changed from baseline 1.0
+## 2. 相较 1.0 基线的变化
 
-| Topic | 1.0 | 2.0 |
+| 主题 | 1.0 | 2.0 |
 |---|---|---|
-| Worker | Future, optional; would call a private internal API over HTTPS | `game-worker` is a V1 component that calls `gamecore` in-process |
-| Internal API | Private route group / listener, three reserved endpoints | Reserved `internal-api` entry with a nine-endpoint contract; not deployed in V1; HMAC AK/SK or mTLS |
-| GM platform | Core workflows first, console in a later phase | Complete GM platform from V1 |
-| ADR layout | Eight ADRs in this file | Nine ADR files under `docs/adr/` |
-| Player contract file | `api/openapi/player-api.yaml` | `api/openapi/game-api.yaml` |
-| Schema | 37 tables | 57 tables, renamed to the `schema.table` names of the design document. The 20 new tables: game environments, login records, player bans, config release items, run events, currency definitions, daily ad limits, announcements, mail attachments, reward jobs, leaderboard snapshots, admin sessions, admin MFA, service audit logs, daily player and game stats, background jobs, service identities, credentials and game grants |
-| Third-party callbacks | Not addressed | Separate `/platform-callbacks/v1` surface with per-platform verification |
+| Worker | 未来可选组件；通过 HTTPS 调用私有内部 API | `game-worker` 是 V1 组件，在进程内调用 `gamecore` |
+| 内部 API | 私有路由组/监听器，预留三个端点 | 预留 `internal-api` 入口及九个端点的契约；V1 不部署；使用 HMAC AK/SK 或 mTLS |
+| GM 平台 | 先实现核心流程，后续阶段再建控制台 | V1 即提供完整 GM 平台 |
+| ADR 布局 | 八项 ADR 集中在本文 | 九个 ADR 文件，位于 `docs/adr/` |
+| 玩家 API 契约文件 | `api/openapi/player-api.yaml` | `api/openapi/game-api.yaml` |
+| 数据库结构 | 37 张表 | 57 张表，表名改为设计文档中的 `schema.table` 形式。新增 20 张表：游戏环境、登录记录、玩家封禁、配置发布项、对局事件、货币定义、广告每日限额、公告、邮件附件、奖励任务、排行榜快照、管理员会话、管理员 MFA、服务审计日志、玩家和游戏每日统计、后台任务、服务身份、凭据和游戏授权 |
+| 第三方回调 | 未涉及 | 独立的 `/platform-callbacks/v1` 入口，并按平台分别验证 |
 
-## 3. Logical architecture
+## 3. 逻辑架构
 
 ```mermaid
 flowchart LR
@@ -42,39 +42,39 @@ flowchart LR
   Internal -. reserved .-> Core
 ```
 
-Solid lines are V1. Dotted lines are reserved: `internal-api` has a contract and a service-auth abstraction but is not deployed.
+实线表示 V1 已部署的部分。虚线表示预留部分：`internal-api` 有契约和服务认证抽象，但不会部署。
 
-## 4. ADR index
+## 4. ADR 索引
 
-| ADR | Decision | Replaces (1.0) |
+| ADR | 决策 | 取代的 1.0 决策 |
 |---|---|---|
-| [ADR-0001](../adr/ADR-0001-modular-monolith.md) | Modular monolith: one Go module, shared `gamecore`, independently deployed entrypoints | ADR-001 |
-| [ADR-0002](../adr/ADR-0002-game-isolation.md) | `game_id` is the isolation key, enforced by composite keys, explicit repository scope and separate database roles | Parts of ADR-003, ADR-005 |
-| [ADR-0003](../adr/ADR-0003-player-account-model.md) | Per-game player accounts; WeChat login; platform tokens; platform adapter | ADR-003 |
-| [ADR-0004](../adr/ADR-0004-data-authority-model.md) | Server authority for key data; client-run combat with server settlement; PostgreSQL authoritative | ADR-004, part of ADR-005 |
-| [ADR-0005](../adr/ADR-0005-api-service-boundaries.md) | Four entries and three security planes; `Actor` context; OpenAPI contracts; callbacks as a separate surface | ADR-006, ADR-007 |
-| [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md) | One database, schemas by domain, constraint and role conventions, migrations | ADR-005, part of ADR-006 |
-| [ADR-0007](../adr/ADR-0007-economy-transaction-model.md) | Balance plus immutable ledger, idempotent single write path, GM adjustments | Part of ADR-004 |
-| [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md) | Worker calls `gamecore` directly; internal API reserved | ADR-002 |
-| [ADR-0009](../adr/ADR-0009-async-job-model.md) | PostgreSQL-backed jobs and outbox; no broker | Part of ADR-008 |
+| [ADR-0001](../adr/ADR-0001-modular-monolith.md) | 模块化单体：单一 Go 模块，共用 `gamecore`，入口独立部署 | ADR-001 |
+| [ADR-0002](../adr/ADR-0002-game-isolation.md) | 以 `game_id` 为隔离键，通过复合键、显式 Repository 范围和独立数据库角色落实隔离 | ADR-003、ADR-005 的部分内容 |
+| [ADR-0003](../adr/ADR-0003-player-account-model.md) | 玩家账号按游戏隔离；微信登录；平台令牌；平台适配器 | ADR-003 |
+| [ADR-0004](../adr/ADR-0004-data-authority-model.md) | 关键数据由服务端权威管理；客户端运行战斗、服务端结算；PostgreSQL 为权威存储 | ADR-004、ADR-005 的部分内容 |
+| [ADR-0005](../adr/ADR-0005-api-service-boundaries.md) | 四个入口和三个安全平面；`Actor` 上下文；OpenAPI 契约；回调独立接入 | ADR-006、ADR-007 |
+| [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md) | 单一数据库，按领域划分 Schema；约束、角色和迁移约定 | ADR-005、ADR-006 的部分内容 |
+| [ADR-0007](../adr/ADR-0007-economy-transaction-model.md) | 余额与不可变流水；幂等的单一写入路径；GM 调账 | ADR-004 的部分内容 |
+| [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md) | Worker 直接调用 `gamecore`；内部 API 预留 | ADR-002 |
+| [ADR-0009](../adr/ADR-0009-async-job-model.md) | 基于 PostgreSQL 的任务与 Outbox；不引入消息代理 | ADR-008 的部分内容 |
 
-Changing a decision means amending its ADR and having it reviewed before implementation. Implementation work must not silently rewrite an accepted ADR.
+变更决策时，必须修订对应 ADR，并在实施前完成评审。实施工作不得悄然改写已接受的 ADR。
 
-## 5. Component responsibilities
+## 5. 组件职责
 
-| Component | Responsibility | Reachable from | V1 |
+| 组件 | 职责 | 可从何处访问 | V1 状态 |
 |---|---|---|---|
-| `game-api` | WeChat login, profile, save, config, runs and settlement, economy, ads, mail, activities, leaderboards, event upload | Public | Deployed |
-| `gm-api` | GM auth and MFA, RBAC, games, players, economy adjustments, config publishing, mail, activities, announcements, leaderboards, analytics, audit | Restricted | Deployed |
-| `gm-web` | Operator console (Vue 3 + TypeScript + Element Plus) | Restricted | Deployed |
-| `game-worker` | Outbox and background jobs: batch mail and rewards, statistics, rebuilds, cleanup, snapshots | No inbound traffic | Deployed |
-| `internal-api` | Authenticated service-to-service operations | Private network only | Reserved |
-| `gamecore` | Domain model, application services, repositories | In-process only | — |
-| PostgreSQL | Authoritative store | Private | — |
-| Redis | Cache, rate limiting, leaderboard read acceleration | Private | — |
-| S3/OSS + CDN | Config payloads, assets, save backups | CDN read where appropriate | — |
+| `game-api` | 微信登录、玩家资料、存档、配置、对局和结算、经济系统、广告、邮件、活动、排行榜、事件上传 | 公网 | 部署 |
+| `gm-api` | GM 认证和 MFA、RBAC、游戏、玩家、经济调账、配置发布、邮件、活动、公告、排行榜、分析、审计 | 受限网络 | 部署 |
+| `gm-web` | 运营管理控制台（Vue 3 + TypeScript + Element Plus） | 受限网络 | 部署 |
+| `game-worker` | Outbox 和后台任务：批量邮件与奖励、统计、重建、清理、快照 | 不接收入站流量 | 部署 |
+| `internal-api` | 已认证的服务间操作 | 仅限私有网络 | 预留 |
+| `gamecore` | 领域模型、应用服务、Repository | 仅进程内 | — |
+| PostgreSQL | 权威存储 | 私有网络 | — |
+| Redis | 缓存、限流、排行榜读取加速 | 私有网络 | — |
+| S3/OSS + CDN | 配置负载、资源和存档备份 | 适用时允许 CDN 读取 | — |
 
-## 6. Repository layout
+## 6. 仓库布局
 
 ```text
 game-platform/
@@ -84,7 +84,7 @@ game-platform/
 ├── services/
 │   ├── game-api/cmd/server/main.go
 │   ├── gm-api/cmd/server/main.go
-│   ├── internal-api/cmd/server/main.go   # reserved; not deployed in V1
+│   ├── internal-api/cmd/server/main.go   # 预留；V1 不部署
 │   └── game-worker/cmd/worker/main.go
 ├── internal/
 │   ├── gamecore/{domain,application,repository}/
@@ -98,34 +98,34 @@ game-platform/
 ├── deploy/{docker,compose,nginx,monitoring}/
 ├── docs/
 ├── AGENTS.md
-└── go.mod                           # one Go module at the repository root
+└── go.mod                           # 仓库根目录的唯一 Go 模块
 ```
 
-`gamecore` does not import Gin or any transport DTO. Entry packages under `internal/transport/http/*` do not import each other.
+`gamecore` 不得导入 Gin 或任何传输层 DTO。`internal/transport/http/*` 下的入口包不得互相导入。
 
-## 7. Required security and reliability controls
+## 7. 必须落实的安全与可靠性控制
 
-- Resolve game identity server-side; reject unknown or disabled platform apps. Never let a client switch games by sending a `game_id`.
-- Hash refresh tokens at rest; rotate on use; support revocation.
-- Rate-limit login, refresh, save, settlement, ad claim and GM authentication.
-- Make every important write idempotent: identity creation at login, settlement, grants and spends, mail and activity claims, ad claims, GM adjustments, batch reward jobs. The final guarantee is a PostgreSQL unique key and transaction, not a Redis lock.
-- Append an audit record for every GM mutation with operator, game, action, target, before/after data, reason and request ID; redact passwords, tokens and secrets.
-- Structured JSON logs with `request_id`, `game_id`, `player_id`, route, status and latency. Never log AppSecret, refresh tokens, full `Authorization` headers or WeChat `session_key`.
-- Back up PostgreSQL and test restore; keep a backup and recovery runbook.
-- Place `gm-api` behind VPN, Zero Trust or an IP allowlist where feasible, in addition to MFA and rate limits.
+- 在服务端解析游戏身份；拒绝未知或停用的平台应用。绝不允许客户端通过传入 `game_id` 切换游戏。
+- Refresh token 静态存储时必须哈希；使用时轮换，并支持撤销。
+- 对登录、令牌刷新、存档、结算、广告领取和 GM 认证限流。
+- 所有重要写入都必须幂等：登录身份创建、结算、发放与扣除、邮件和活动领取、广告领取、GM 调账、批量奖励任务。最终保障依赖 PostgreSQL 唯一键和事务，而不是 Redis 锁。
+- 每次 GM 变更都追加审计记录，包含操作员、游戏、操作、目标、变更前后数据、原因和请求 ID；密码、令牌和密钥必须脱敏。
+- 使用结构化 JSON 日志，并记录 `request_id`、`game_id`、`player_id`、路由、状态和延迟。绝不记录 AppSecret、refresh token、完整 `Authorization` 请求头或微信 `session_key`。
+- 备份 PostgreSQL 并测试恢复；维护备份与恢复手册。
+- 在可行时，将 `gm-api` 部署在 VPN、零信任网络或 IP 允许列表之后，并同时启用 MFA 和限流。
 
-## 8. Open questions to resolve before production
+## 8. 生产前需解决的待决问题
 
-1. WeChat app credential rotation and ownership process.
-2. Which process hosts `/platform-callbacks/v1`, and whether any callback is built in V1 at all. Scenarios and options are in [service-boundaries.md](service-boundaries.md#5-third-party-callbacks); ADR-0005 assumes a route group in `game-api`.
-3. Whether to adopt WeChat's optional server-side verification for rewarded ads in V1. WeChat documents the mode (<https://developers.weixin.qq.com/minigame/dev/guide/security/antiadcheat.html>); its request fields and signature scheme have not been reviewed here. Adopting it needs a callback endpoint and a column on `ads.ad_sessions`.
-4. Whether high-value combat rewards need server replay verification in the first game.
-5. The amount threshold at which GM adjustments require dual approval, and when that enhancement ships.
-6. Retention policy for player identifiers, event data, ledgers and audit logs.
-7. Target regions, RPO/RTO, data residency and expected concurrency.
-8. GM refresh-token lifetime (left to security policy in ADR-0003).
-9. The role-to-permission mapping in [rbac-matrix.md](../security/rbac-matrix.md) and the grant matrix in [database-roles-and-grants.md](../database/database-roles-and-grants.md) are proposals awaiting confirmation.
-10. Items marked **(proposal)** in the topic documents: session denylist, refresh-token reuse detection, wallet write path (repository discipline or `SECURITY DEFINER` function), first RLS tables, backoff and lease values.
-11. Endpoints the GM menu implies but the API table does not list: GM logout and MFA enrollment, item adjustments, batch rewards other than mail, list/edit/publish for activities and announcements, leaderboard creation and rebuild, job progress and manual retry. On the player side: marking mail as read.
+1. 微信应用凭据的轮换和归属管理流程。
+2. 哪个进程承载 `/platform-callbacks/v1`，以及 V1 是否实现任何回调。[服务边界](service-boundaries.md#5-third-party-callbacks)列出了场景与选项；ADR-0005 假设在 `game-api` 中配置独立路由组。
+3. V1 是否采用微信可选的服务端激励广告验证。微信说明了该模式；其请求字段和签名方案尚未在此评审。采用该功能需要回调端点及 `ads.ad_sessions` 中的一个字段。
+4. 首款游戏中的高价值战斗奖励是否需要服务端回放验证。
+5. GM 调账需要双人审批的金额门槛，以及该增强功能的上线时间。
+6. 玩家标识、事件数据、流水和审计日志的保留策略。
+7. 目标区域、RPO/RTO、数据驻留要求和预期并发量。
+8. GM refresh token 有效期（ADR-0003 留给安全策略决定）。
+9. [RBAC 矩阵](../security/rbac-matrix.md)中的角色到权限映射，以及[数据库角色与授权](../database/database-roles-and-grants.md)中的授权矩阵均为待确认提案。
+10. 主题文档中标记为**（提案）**的事项：会话拒绝名单、refresh token 重用检测、钱包写入路径（Repository 规范或 `SECURITY DEFINER` 函数）、首批启用 RLS 的表、退避和租约数值。
+11. GM 菜单暗示但 API 表格未列出的端点：GM 登出和 MFA 注册、道具调整、邮件之外的批量奖励、活动和公告的列表/编辑/发布、排行榜创建和重建、任务进度及手动重试。玩家端还缺少标记邮件已读的能力。
 
-These are implementation gates; do not invent production defaults for them.
+这些问题是实施门禁，不得擅自编造生产环境默认值。

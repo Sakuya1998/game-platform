@@ -1,31 +1,31 @@
 openapi: 3.1.0
 info:
-  title: Game Platform GM API
+  title: 游戏平台 GM API
   version: 2.0.0
   description: |
-    Operator API served by `gm-api`. Design baseline v2.0 (2026-11-23); see
-    docs/game-platform-technical-design.md sections 6.2 and 7.
+    由 `gm-api` 提供的运营端 API。设计基线 v2.0（2026-11-23），详见
+    `docs/game-platform-technical-design.md` 第 6.2 和 7 节。
 
-    Rules that apply to every operation:
+    所有操作均适用以下规则：
 
-    - The GM plane is separate from the player plane: its own login, MFA, tokens, signing keys
-      and sessions. Player credentials are never accepted.
-    - Authorization is deny-by-default and evaluated as administrator + permission code + game
-      scope. `x-required-permission` names the permission code of each operation. A `game_id` in
-      the path is accepted only after the administrator's scope for that game is confirmed.
-    - Every mutation appends an audit record (operator, game, action, target, before/after,
-      reason, request ID).
-    - Mutations require `Idempotency-Key`. High-risk operations also require `reason`.
-    - Batch operations (mass mail, batch rewards) create a background job and return its
-      reference; they are never executed inside the request.
-    - Responses use the envelope `{ code, message, data, request_id }`.
+    - GM 平面与玩家平面相互隔离，使用独立的登录、MFA、令牌、签名密钥
+      和会话。绝不接受玩家凭据。
+    - 授权默认拒绝，并按管理员 + 权限代码 + 游戏范围进行评估。`x-required-permission` 指定
+      每项操作所需的权限代码。只有确认管理员获准访问对应游戏后，才接受路径中的
+      `game_id`。
+    - 每次变更都追加一条审计记录（操作员、游戏、操作、目标、变更前后值、
+      原因、请求 ID）。
+    - 变更操作必须携带 `Idempotency-Key`。高风险操作还必须提供 `reason`。
+    - 批量操作（群发邮件、批量奖励）会创建后台任务并返回任务引用；
+      绝不在当前请求中执行。
+    - 响应使用 `{ code, message, data, request_id }` 信封。
 servers:
   - url: https://gm-api.example.com
 security:
   - AdminBearer: []
 tags:
   - name: Auth
-  - name: Games
+  - name: 游戏列表
   - name: Players
   - name: Economy
   - name: Config
@@ -42,7 +42,7 @@ paths:
     post:
       tags: [Auth]
       operationId: adminLogin
-      summary: Administrator login (first factor)
+      summary: 管理员登录（第一验证因素）
       security: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -58,7 +58,7 @@ paths:
                 password: { type: string, format: password }
       responses:
         '200':
-          description: MFA challenge. Tokens are issued by `/auth/mfa/verify`.
+          description: MFA 挑战。令牌由 `/auth/mfa/verify` 签发。
           content:
             application/json:
               schema:
@@ -71,17 +71,17 @@ paths:
                         required: [mfa_required, challenge_token]
                         properties:
                           mfa_required: { type: boolean }
-                          challenge_token: { type: string, description: 'Short-lived and single-use.' }
+                          challenge_token: { type: string, description: '短时有效且仅可使用一次。' }
                           mfa_enrollment_required:
                             type: boolean
-                            description: True when the administrator has not enrolled MFA yet.
+                            description: 管理员尚未注册 MFA 时为 true。
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /gm/v1/auth/mfa/verify:
     post:
       tags: [Auth]
       operationId: verifyMfa
-      summary: Verify the MFA code and issue an administrator session
+      summary: 验证 MFA 验证码并签发管理员会话
       security: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -94,10 +94,10 @@ paths:
               required: [challenge_token, code]
               properties:
                 challenge_token: { type: string }
-                code: { type: string, description: TOTP code or recovery code. }
+                code: { type: string, description: TOTP 验证码或恢复码。 }
       responses:
         '200':
-          description: Session issued
+          description: 会话已签发
           content:
             application/json:
               schema:
@@ -112,7 +112,7 @@ paths:
     post:
       tags: [Auth]
       operationId: adminRefresh
-      summary: Rotate the administrator refresh token
+      summary: 轮换管理员 refresh token
       security: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -127,7 +127,7 @@ paths:
                 refresh_token: { type: string }
       responses:
         '200':
-          description: Rotated tokens
+          description: 令牌已轮换
           content:
             application/json:
               schema:
@@ -139,15 +139,15 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
   /gm/v1/games:
     get:
-      tags: [Games]
-      operationId: listGames
-      summary: List the games the administrator is scoped to
+      tags: [游戏列表]
+      operationId: list游戏列表
+      summary: 列出管理员获授权的游戏
       x-required-permission: game.read
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Games
+          description: 游戏列表
           content:
             application/json:
               schema:
@@ -165,10 +165,10 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
-      tags: [Games]
+      tags: [游戏列表]
       operationId: createGame
-      summary: Create a game
-      description: Requires platform scope.
+      summary: 创建游戏
+      description: 需要平台级权限范围。
       x-required-permission: game.manage
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -193,10 +193,10 @@ paths:
                       app_id: { type: string }
                       credential_ref:
                         type: string
-                        description: Secret-manager reference. The AppSecret itself is never sent to this API.
+                        description: 密钥管理器引用。AppSecret 本身绝不会发送到此 API。
       responses:
         '201':
-          description: Game created
+          description: 游戏已创建
           content:
             application/json:
               schema:
@@ -213,7 +213,7 @@ paths:
     get:
       tags: [Players]
       operationId: searchPlayers
-      summary: Search players of a game
+      summary: 搜索游戏中的玩家
       x-required-permission: player.read
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -234,7 +234,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Player page
+          description: 玩家分页结果
           content:
             application/json:
               schema:
@@ -256,7 +256,7 @@ paths:
     get:
       tags: [Players]
       operationId: getPlayer
-      summary: Get player detail
+      summary: 获取玩家详情
       x-required-permission: player.read
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -264,7 +264,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Player detail
+          description: 玩家详情
           content:
             application/json:
               schema:
@@ -280,7 +280,7 @@ paths:
     post:
       tags: [Players]
       operationId: banPlayer
-      summary: Ban a player
+      summary: 封禁玩家
       x-required-permission: player.ban
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -300,10 +300,10 @@ paths:
                 expires_at:
                   type: [string, 'null']
                   format: date-time
-                  description: Null or absent means the ban lasts until it is lifted.
+                  description: 为 null 或未提供时，封禁持续有效，直到被解除。
       responses:
         '200':
-          description: Player banned; active sessions revoked
+          description: 玩家已封禁；有效会话已撤销
           content:
             application/json:
               schema:
@@ -321,7 +321,7 @@ paths:
     post:
       tags: [Players]
       operationId: unbanPlayer
-      summary: Lift a player's active ban
+      summary: 解除玩家当前封禁
       x-required-permission: player.unban
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -349,10 +349,10 @@ paths:
     post:
       tags: [Players]
       operationId: restorePlayerSave
-      summary: Restore a player's save from a snapshot
+      summary: 从快照恢复玩家存档
       description: |
-        The current save is snapshotted first (`before_restore`), then replaced by the chosen
-        snapshot with a new `save_version`. Wallets and items are not affected.
+        先为当前存档创建快照（`before_restore`），再使用所选
+        快照替换存档，并生成新的 `save_version`。钱包和道具不受影响。
       x-required-permission: player.save.restore
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -372,7 +372,7 @@ paths:
                 ticket_id: { type: string }
       responses:
         '200':
-          description: Save restored
+          description: 存档已恢复
           content:
             application/json:
               schema:
@@ -393,8 +393,8 @@ paths:
   /gm/v1/games/{game_id}/players/{player_id}/wallets:
     get:
       tags: [Economy]
-      operationId: getPlayerWallets
-      summary: Get a player's balances
+      operationId: getPlayer钱包
+      summary: 获取玩家余额
       x-required-permission: economy.read
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -402,7 +402,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Wallets
+          description: 钱包
           content:
             application/json:
               schema:
@@ -424,12 +424,12 @@ paths:
     post:
       tags: [Economy]
       operationId: adjustWallet
-      summary: Manually credit or debit a player's wallet
+      summary: 手动增加或扣除玩家钱包余额
       description: |
-        Ledger-backed adjustment. The request carries a change amount, never a target balance.
-        A positive `amount` credits and requires `economy.grant`; a negative `amount` debits and
-        requires `economy.deduct`. The ledger row and the audit record are written in the same
-        transaction. A debit that would make the balance negative is rejected.
+        调账必须写入流水。请求携带变更金额，绝不携带目标余额。
+        正数 `amount` 表示增加余额，需要 `economy.grant` 权限；负数表示扣款，需要
+        `economy.deduct` 权限。流水和审计记录在同一
+        事务中写入。若扣款会导致余额为负，则拒绝操作。
       x-required-permission: economy.grant | economy.deduct
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -449,13 +449,13 @@ paths:
                   type: integer
                   format: int64
                   not: { const: 0 }
-                  description: Signed change in minor units.
+                  description: 以最小单位表示的带符号变更金额。
                   examples: [1000]
                 reason: { type: string, minLength: 3, examples: [customer compensation] }
                 ticket_id: { type: string, examples: [SUPPORT-12345] }
       responses:
         '201':
-          description: Adjustment committed
+          description: 调账已提交
           content:
             application/json:
               schema:
@@ -469,7 +469,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Insufficient balance (`INSUFFICIENT_BALANCE`) or idempotency conflict
+          description: 余额不足（`INSUFFICIENT_BALANCE`）或发生幂等冲突
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -477,7 +477,7 @@ paths:
     get:
       tags: [Economy]
       operationId: listTransactions
-      summary: Query the wallet ledger of a game
+      summary: 查询游戏的钱包流水
       x-required-permission: economy.read
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -507,7 +507,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Ledger page, newest first
+          description: 流水分页结果，按时间倒序
           content:
             application/json:
               schema:
@@ -528,16 +528,16 @@ paths:
   /gm/v1/games/{game_id}/configs:
     get:
       tags: [Config]
-      operationId: listConfigs
-      summary: List configs of a game with their active version
-      description: Retained from contract 1.0; not listed in section 6.2 of the design document.
+      operationId: list配置列表
+      summary: 列出游戏配置及其生效版本
+      description: 沿用契约 1.0；设计文档第 6.2 节未列出此操作。
       x-required-permission: config.read
       parameters:
         - $ref: '#/components/parameters/GameId'
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Configs
+          description: 配置列表
           content:
             application/json:
               schema:
@@ -557,7 +557,7 @@ paths:
     post:
       tags: [Config]
       operationId: createConfig
-      summary: Create a config with its first draft version
+      summary: 创建配置及其首个草稿版本
       x-required-permission: config.edit
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -573,11 +573,11 @@ paths:
               properties:
                 config_key: { type: string }
                 description: { type: string }
-                json_schema: { type: object, description: JSON Schema used by validation. }
+                json_schema: { type: object, description: 用于校验的 JSON Schema。 }
                 content: { type: object }
       responses:
         '201':
-          description: Config and draft version 1 created
+          description: 配置及草稿版本 1 已创建
           content:
             application/json:
               schema:
@@ -594,10 +594,10 @@ paths:
     post:
       tags: [Config]
       operationId: createConfigVersion
-      summary: Create a new draft version of a config
+      summary: 为配置创建新草稿版本
       description: |
-        Retained from contract 1.0; not listed in section 6.2 of the design document. Versions are
-        immutable once validated, so editing a config means creating a new version.
+        沿用契约 1.0；设计文档第 6.2 节未列出此操作。 版本
+        通过校验后不可变，因此编辑配置意味着创建新版本。
       x-required-permission: config.edit
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -616,7 +616,7 @@ paths:
                 schema_version: { type: integer, minimum: 1, default: 1 }
       responses:
         '201':
-          description: Draft version created
+          description: 草稿版本已创建
           content:
             application/json:
               schema:
@@ -633,7 +633,7 @@ paths:
     post:
       tags: [Config]
       operationId: validateConfigVersion
-      summary: Validate a draft version against the config's JSON Schema and business rules
+      summary: 根据配置的 JSON Schema 和业务规则校验草稿版本
       x-required-permission: config.edit
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -650,7 +650,7 @@ paths:
                 version: { type: integer, minimum: 1 }
       responses:
         '200':
-          description: Validation result. A failed validation is a 200 with `status = invalid`.
+          description: 校验结果。校验失败时仍返回 200，且 `status = invalid`。
           content:
             application/json:
               schema:
@@ -666,8 +666,8 @@ paths:
     post:
       tags: [Config]
       operationId: publishConfig
-      summary: Publish a validated version
-      description: Creates a new release. Only versions in `validated` status can be published.
+      summary: 发布已校验的版本
+      description: 创建新的发布记录。只有状态为 `validated` 的版本才可发布。
       x-required-permission: config.publish
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -686,7 +686,7 @@ paths:
                 reason: { type: string, minLength: 3 }
       responses:
         '200':
-          description: Release created
+          description: 发布记录已创建
           content:
             application/json:
               schema:
@@ -699,7 +699,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Version is not validated (`CONFIG_VERSION_INVALID`) or idempotency conflict
+          description: 版本尚未通过校验（`CONFIG_VERSION_INVALID`）或发生幂等冲突
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -707,8 +707,8 @@ paths:
     post:
       tags: [Config]
       operationId: rollbackConfig
-      summary: Roll back to an earlier published version
-      description: Creates a new release of type `rollback` that points at the earlier version. No release is overwritten.
+      summary: 回滚到较早发布的版本
+      description: 创建一条指向较早版本、类型为 `rollback` 的新发布记录；不会覆盖任何发布记录。
       x-required-permission: config.publish
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -726,11 +726,11 @@ paths:
                 version:
                   type: integer
                   minimum: 1
-                  description: Previously published version to make active again.
+                  description: 要重新启用的已发布版本。
                 reason: { type: string, minLength: 3 }
       responses:
         '200':
-          description: Rollback release created
+          description: 回滚发布记录已创建
           content:
             application/json:
               schema:
@@ -747,7 +747,7 @@ paths:
     post:
       tags: [Mail]
       operationId: createMail
-      summary: Create a mail draft
+      summary: 创建邮件草稿
       x-required-permission: mail.create
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -766,14 +766,14 @@ paths:
                 target_type: { type: string, enum: [all_players, player_list, segment] }
                 target_filter:
                   type: object
-                  description: Player IDs for `player_list`, or segment conditions for `segment`.
+                  description: 当目标类型为 `player_list` 时填写玩家 ID；为 `segment` 时填写分群条件。
                 attachments:
                   type: array
                   items: { $ref: '#/components/schemas/Reward' }
                 expires_at: { type: string, format: date-time }
       responses:
         '201':
-          description: Mail draft created
+          description: 邮件草稿已创建
           content:
             application/json:
               schema:
@@ -789,10 +789,9 @@ paths:
     post:
       tags: [Mail]
       operationId: sendMail
-      summary: Send a mail
+      summary: 发送邮件
       description: |
-        Creates a background job executed by `game-worker` and returns its reference. Delivery to
-        each player is idempotent.
+        创建由 `game-worker` 执行的后台任务并返回任务引用。邮件投递对每位玩家均保证幂等。
       x-required-permission: mail.send
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -815,10 +814,10 @@ paths:
                 send_at:
                   type: string
                   format: date-time
-                  description: Scheduled send time. Absent means as soon as possible.
+                  description: 计划发送时间。未提供时尽快发送。
       responses:
         '202':
-          description: Delivery job accepted
+          description: 邮件投递任务已接收
           content:
             application/json:
               schema:
@@ -835,7 +834,7 @@ paths:
     post:
       tags: [Activity]
       operationId: createActivity
-      summary: Create an activity
+      summary: 创建活动
       x-required-permission: activity.manage
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -852,12 +851,12 @@ paths:
                 activity_code: { type: string }
                 activity_type: { type: string }
                 name: { type: string }
-                config: { type: object, description: Tasks and reward table. }
+                config: { type: object, description: 任务和奖励表。 }
                 start_at: { type: string, format: date-time }
                 end_at: { type: string, format: date-time }
       responses:
         '201':
-          description: Activity created in `draft` status
+          description: 活动已创建，状态为 `draft`
           content:
             application/json:
               schema:
@@ -874,7 +873,7 @@ paths:
     post:
       tags: [Announcement]
       operationId: createAnnouncement
-      summary: Create an announcement for a game
+      summary: 为游戏创建公告
       x-required-permission: announcement.manage
       parameters:
         - $ref: '#/components/parameters/GameId'
@@ -895,7 +894,7 @@ paths:
                 end_at: { type: string, format: date-time }
       responses:
         '201':
-          description: Announcement created
+          description: 公告已创建
           content:
             application/json:
               schema:
@@ -910,15 +909,15 @@ paths:
   /gm/v1/games/{game_id}/leaderboards:
     get:
       tags: [Ranking]
-      operationId: listLeaderboards
-      summary: List leaderboards of a game
+      operationId: list排行榜列表
+      summary: 列出游戏排行榜
       x-required-permission: ranking.read
       parameters:
         - $ref: '#/components/parameters/GameId'
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Leaderboards
+          description: 排行榜列表
           content:
             application/json:
               schema:
@@ -939,7 +938,7 @@ paths:
     get:
       tags: [Admin]
       operationId: listAdmins
-      summary: List administrators
+      summary: 列出管理员
       x-required-permission: admin.read
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -947,7 +946,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Administrator page
+          description: 管理员分页结果
           content:
             application/json:
               schema:
@@ -968,8 +967,8 @@ paths:
     post:
       tags: [Admin]
       operationId: createAdmin
-      summary: Create an administrator
-      description: The new administrator sets a password and enrolls MFA at first login. No password is returned.
+      summary: 创建管理员
+      description: 新管理员在首次登录时设置密码并注册 MFA。API 不会返回任何密码。
       x-required-permission: admin.manage
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -990,7 +989,7 @@ paths:
                   items: { $ref: '#/components/schemas/RoleAssignment' }
       responses:
         '201':
-          description: Administrator created
+          description: 管理员已创建
           content:
             application/json:
               schema:
@@ -1006,14 +1005,14 @@ paths:
   /gm/v1/roles:
     get:
       tags: [RBAC]
-      operationId: listRoles
-      summary: List roles with their permission codes
+      operationId: list角色列表
+      summary: 列出角色及其权限代码
       x-required-permission: admin.read
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Roles
+          description: 角色列表
           content:
             application/json:
               schema:
@@ -1034,7 +1033,7 @@ paths:
     put:
       tags: [RBAC]
       operationId: setRolePermissions
-      summary: Replace the permission set of a role
+      summary: 替换角色的权限集合
       x-required-permission: rbac.manage
       parameters:
         - name: role_id
@@ -1057,7 +1056,7 @@ paths:
                 reason: { type: string, minLength: 3 }
       responses:
         '200':
-          description: Role updated
+          description: 角色已更新
           content:
             application/json:
               schema:
@@ -1074,8 +1073,8 @@ paths:
     get:
       tags: [Audit]
       operationId: searchAuditLogs
-      summary: Query GM audit logs
-      description: Results are limited to the games the administrator is scoped to. Platform-level entries require platform scope.
+      summary: 查询 GM 审计日志
+      description: 结果仅限管理员获授权的游戏。查看平台级记录需要平台级权限范围。
       x-required-permission: audit.read
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -1104,7 +1103,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Audit log page, newest first
+          description: 审计日志分页结果，按时间倒序
           content:
             application/json:
               schema:
@@ -1126,7 +1125,7 @@ paths:
     get:
       tags: [Analytics]
       operationId: getAnalyticsOverview
-      summary: Operations overview for one game
+      summary: 查看单个游戏的运营概览
       x-required-permission: analytics.read
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -1144,7 +1143,7 @@ paths:
           schema: { type: string, format: date }
       responses:
         '200':
-          description: Daily metrics for the date range
+          description: 指定日期范围内的每日指标
           content:
             application/json:
               schema:
@@ -1169,7 +1168,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Administrator access token issued after MFA. Separate issuer, audience and signing keys from the player plane.
+      description: 完成 MFA 后签发的管理员 access token。其签发方、受众和签名密钥均与玩家平面隔离。
   parameters:
     RequestId:
       name: X-Request-ID
@@ -1205,37 +1204,37 @@ components:
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
   responses:
     Ok:
-      description: Success
+      description: 成功
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
     BadRequest:
-      description: Invalid request
+      description: 请求无效
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Unauthorized:
-      description: Missing, invalid or expired administrator credentials (`AUTH_UNAUTHORIZED`)
+      description: 管理员凭据缺失、无效或已过期（`AUTH_UNAUTHORIZED`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: Missing permission code or game scope (`AUTH_FORBIDDEN`)
+      description: 缺少权限代码或游戏范围（`AUTH_FORBIDDEN`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     NotFound:
-      description: Resource not found in this game (`RESOURCE_NOT_FOUND`)
+      description: 此游戏中不存在该资源（`RESOURCE_NOT_FOUND`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Conflict:
-      description: State or idempotency conflict (`IDEMPOTENCY_CONFLICT`)
+      description: 状态或幂等冲突（`IDEMPOTENCY_CONFLICT`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     RateLimited:
-      description: Rate limit exceeded (`RATE_LIMITED`)
+      description: 超出限流阈值（`RATE_LIMITED`）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -1252,7 +1251,7 @@ components:
       type: object
       required: [code, message, request_id]
       properties:
-        code: { type: string, description: Stable machine-readable code. }
+        code: { type: string, description: 稳定、可供机器解析的代码。 }
         message: { type: string }
         data: {}
         request_id: { type: string }
@@ -1262,7 +1261,7 @@ components:
       properties:
         access_token: { type: string }
         refresh_token: { type: string }
-        expires_in: { type: integer, description: Access token lifetime in seconds. }
+        expires_in: { type: integer, description: access token 的有效时长（秒）。 }
         admin: { $ref: '#/components/schemas/Admin' }
     RoleAssignment:
       type: object
@@ -1273,7 +1272,7 @@ components:
         game_id:
           type: [string, 'null']
           format: uuid
-          description: Required when `scope_type` is `game`.
+          description: 当 `scope_type` 为 `game` 时必填。
     Admin:
       type: object
       required: [admin_id, username, status]
@@ -1376,7 +1375,7 @@ components:
       required: [type, id, quantity]
       properties:
         type: { type: string, enum: [currency, item] }
-        id: { type: string, description: Currency code or item ID. }
+        id: { type: string, description: 货币代码或道具 ID。 }
         quantity: { type: integer, format: int64, minimum: 1 }
     Wallet:
       type: object
@@ -1513,8 +1512,8 @@ components:
         action: { type: string }
         target_type: { type: string }
         target_id: { type: [string, 'null'] }
-        before_data: { description: Redacted snapshot before the change. }
-        after_data: { description: Redacted snapshot after the change. }
+        before_data: { description: 变更前的脱敏快照。 }
+        after_data: { description: 变更后的脱敏快照。 }
         reason: { type: [string, 'null'] }
         ticket_id: { type: [string, 'null'] }
         request_id: { type: string }
@@ -1526,4 +1525,4 @@ components:
         stat_date: { type: string, format: date }
         metrics:
           type: object
-          description: For example dau, new_players, runs, settlements, ad_claims, retention_d1.
+          description: 例如 dau、new_players、runs、settlements、ad_claims、retention_d1。

@@ -1,94 +1,94 @@
-# Architecture documentation
+﻿# 架构文档
 
-Baseline v2.0 (2026-11-23).
+基线版本：v2.0（2026-11-23）。
 
-## Overview
+## 概览
 
-| Document | Purpose |
+| 文档 | 内容 |
 |---|---|
-| [Game Platform 技术设计与实施方案](game-platform-technical-design.md) | End-to-end design: architecture, modules, database, APIs, GM platform, worker, deployment, roadmap |
-| [Architecture overview and ADR index](architecture/decisions.md) | Component responsibilities, changes from baseline 1.0, open questions |
-| [Implementation roadmap](implementation/roadmap.md) | Phases P0–P8, gates, Codex tasks T00–T22, V1 scope |
+| [游戏平台技术设计与实施方案](game-platform-technical-design.md) | 端到端设计：架构、模块、数据库、API、GM 平台、Worker、部署与路线图 |
+| [架构概览与 ADR 索引](architecture/decisions.md) | 组件职责、相较 v1.0 基线的变化、待决问题 |
+| [实施路线图](implementation/roadmap.md) | P0–P8 阶段、阶段门禁、Codex 任务 T00–T22、V1 范围 |
 
-## Decisions (Accepted)
+## 已接受的决策
 
-| ADR | Decision |
+| ADR | 决策 |
 |---|---|
-| [ADR-0001](adr/ADR-0001-modular-monolith.md) | Modular monolith: one Go module, shared `gamecore`, independent entrypoints |
-| [ADR-0002](adr/ADR-0002-game-isolation.md) | `game_id` as the isolation key |
-| [ADR-0003](adr/ADR-0003-player-account-model.md) | Per-game accounts, WeChat login, tokens |
-| [ADR-0004](adr/ADR-0004-data-authority-model.md) | Server authority, client-run combat with server settlement |
-| [ADR-0005](adr/ADR-0005-api-service-boundaries.md) | Four entries, three security planes, API conventions |
-| [ADR-0006](adr/ADR-0006-postgresql-schema-design.md) | Schemas, constraints, roles, migrations |
-| [ADR-0007](adr/ADR-0007-economy-transaction-model.md) | Balance plus ledger, idempotency, GM adjustments |
-| [ADR-0008](adr/ADR-0008-internal-api-and-worker.md) | Worker calls `gamecore` directly; internal API reserved |
-| [ADR-0009](adr/ADR-0009-async-job-model.md) | PostgreSQL-backed jobs and outbox |
+| [ADR-0001](adr/ADR-0001-modular-monolith.md) | 模块化单体：单一 Go 模块，共用 `gamecore`，入口独立部署 |
+| [ADR-0002](adr/ADR-0002-game-isolation.md) | 以 `game_id` 作为隔离键 |
+| [ADR-0003](adr/ADR-0003-player-account-model.md) | 每款游戏使用独立账号、微信登录与令牌 |
+| [ADR-0004](adr/ADR-0004-data-authority-model.md) | 服务端权威；客户端运行战斗，由服务端结算 |
+| [ADR-0005](adr/ADR-0005-api-service-boundaries.md) | 四个入口、三个安全平面及 API 约定 |
+| [ADR-0006](adr/ADR-0006-postgresql-schema-design.md) | Schema、约束、角色与迁移 |
+| [ADR-0007](adr/ADR-0007-economy-transaction-model.md) | 余额与流水、幂等性及 GM 调账 |
+| [ADR-0008](adr/ADR-0008-internal-api-and-worker.md) | Worker 直接调用 `gamecore`；内部 API 预留 |
+| [ADR-0009](adr/ADR-0009-async-job-model.md) | 基于 PostgreSQL 的任务与 Outbox |
 
-## Topic documents (Draft for review)
+## 主题文档（评审草案）
 
-These elaborate the ADRs. Where a topic document and an ADR disagree, the ADR wins. Detail that goes beyond the design document or an ADR is marked **(proposal)** inside each file and needs confirmation.
+这些文档对 ADR 作进一步说明。若主题文档与 ADR 冲突，以 ADR 为准。超出设计文档或 ADR 的内容会在文中标注为 **（提案）**，尚待确认。
 
-### Architecture
+### 架构
 
-| Document | Covers |
+| 文档 | 内容 |
 |---|---|
-| [System architecture](architecture/system-architecture.md) | Components, layering, key request flows, technology stack |
-| [Service boundaries](architecture/service-boundaries.md) | The four entries, import rules, the Actor contract, third-party callbacks |
-| [Game isolation](architecture/game-isolation.md) | Isolation layers, scoped and unscoped tables, RLS, isolation tests |
-| [Authentication and authorization](architecture/authentication-and-authorization.md) | Player, GM and service planes, tokens, RBAC evaluation, secrets |
-| [Data authority model](architecture/data-authority-model.md) | Who owns which data, settlement checks, ad reward trust levels |
-| [Economy design](architecture/economy-design.md) | Wallets, items, ledgers, idempotency, GM adjustments, reconciliation |
-| [Async job design](architecture/async-job-design.md) | Job states, claiming, leases, retries, outbox, job catalogue |
-| [Deployment architecture](architecture/deployment-architecture.md) | Topology, configuration, database roles, migrations, environments |
+| [系统架构](architecture/system-architecture.md) | 组件、分层、关键请求流程与技术栈 |
+| [服务边界](architecture/service-boundaries.md) | 四个入口、导入规则、Actor 契约与第三方回调 |
+| [游戏隔离](architecture/game-isolation.md) | 隔离层级、有/无游戏范围的表、RLS 与隔离测试 |
+| [认证与授权](architecture/authentication-and-authorization.md) | 玩家、GM 与服务安全平面、令牌、RBAC 评估与密钥 |
+| [数据权威模型](architecture/data-authority-model.md) | 数据归属、结算校验与广告奖励信任级别 |
+| [经济系统设计](architecture/economy-design.md) | 钱包、道具、流水、幂等性、GM 调账与对账 |
+| [异步任务设计](architecture/async-job-design.md) | 任务状态、领取、租约、重试、Outbox 与任务目录 |
+| [部署架构](architecture/deployment-architecture.md) | 拓扑、配置、数据库角色、迁移与环境 |
 
-### Database
+### 数据库
 
-| Document | Covers |
+| 文档 | 内容 |
 |---|---|
-| [PostgreSQL DDL](database/schema.sql) | Baseline schema: 57 tables in 13 schemas |
-| [ERD](database/erd.md) | Entity relationships, key rules, deviations from the design document |
-| [Schema design](database/schema-design.md) | Conventions, notes per schema, JSONB use, tables that grow |
-| [Constraints and indexes](database/constraints-and-indexes.md) | Business rules enforced by constraints, index catalogue, known gaps |
-| [Database roles and grants](database/database-roles-and-grants.md) | Roles, grant matrix, wallet write path, verification |
+| [PostgreSQL DDL](database/schema.sql) | 基线结构：13 个 Schema、57 张表 |
+| [ERD](database/erd.md) | 实体关系、关键规则及与设计文档的差异 |
+| [Schema 设计](database/schema-design.md) | 约定、各 Schema 说明、JSONB 使用及大表 |
+| [约束与索引](database/constraints-and-indexes.md) | 由约束保证的业务规则、索引目录与已知缺口 |
+| [数据库角色与授权](database/database-roles-and-grants.md) | 角色、授权矩阵、钱包写入路径与验证 |
 
 ### API
 
-| Document | Covers |
+| 文档 | 内容 |
 |---|---|
-| [Game API contract](../api/openapi/game-api.yaml) and [guide](api/game-api.md) | Player-facing API (`/api/v1`) |
-| [GM API contract](../api/openapi/gm-api.yaml) and [guide](api/gm-api.md) | Operator API (`/gm/v1`) |
-| [Internal API contract](../api/openapi/internal-api.yaml) and [guide](api/internal-api.md) | Service-to-service API (`/internal/v1`); reserved, not deployed in V1 |
+| [游戏 API 契约](../api/openapi/game-api.yaml) 与[指南](api/game-api.md) | 面向玩家的 API（`/api/v1`） |
+| [GM API 契约](../api/openapi/gm-api.yaml) 与[指南](api/gm-api.md) | 面向运营人员的 API（`/gm/v1`） |
+| [内部 API 契约](../api/openapi/internal-api.yaml) 与[指南](api/internal-api.md) | 服务间 API（`/internal/v1`）；V1 预留、不部署 |
 
-### Security
+### 安全
 
-| Document | Covers |
+| 文档 | 内容 |
 |---|---|
-| [Threat model](security/threat-model.md) | Assets, actors, trust boundaries, threats and mitigations, accepted risks |
-| [RBAC matrix](security/rbac-matrix.md) | Permission catalogue, role matrix, scope rules |
-| [Audit policy](security/audit-policy.md) | What is audited, record content, redaction, integrity, retention |
+| [威胁模型](security/threat-model.md) | 资产、攻击者、信任边界、威胁缓解与已接受风险 |
+| [RBAC 矩阵](security/rbac-matrix.md) | 权限目录、角色矩阵与范围规则 |
+| [审计策略](security/audit-policy.md) | 审计范围、记录内容、脱敏、完整性与保留期 |
 
-## Baseline
+## 基线
 
-- First client platform: WeChat Mini Games. Other platforms are reached through a platform adapter.
-- Each game has an independent player account namespace; `game_id` is the isolation key.
-- `game-api` and `gm-api` are independently deployed Go + Gin processes with separate security planes.
-- `game-worker` is a separate process for asynchronous work.
-- All three call the same in-process `gamecore` packages. No entry calls another over HTTP.
-- `internal-api` is reserved: it has a contract and a service-auth abstraction but is not deployed in V1.
-- V1 includes the complete GM platform: administrators, RBAC, player and economy management, config centre, mail, activities, audit and basic operations data.
-- PostgreSQL is the authoritative store. Redis is cache, rate limiting and leaderboard read acceleration. S3/OSS + CDN hold config payloads and assets.
-- No message broker, Kubernetes, payments or real-time combat server in V1.
+- 首个客户端平台为微信小游戏；其他平台通过平台适配器接入。
+- 每款游戏拥有独立的玩家账号命名空间，以 `game_id` 作为隔离键。
+- `game-api` 和 `gm-api` 是独立部署的 Go + Gin 进程，各自具有独立的安全平面。
+- `game-worker` 是用于异步任务的独立进程。
+- 三个进程均调用同一进程内的 `gamecore` 包；入口之间不通过 HTTP 相互调用。
+- `internal-api` 仅作预留：保留契约和服务认证抽象，V1 不部署。
+- V1 包含完整的 GM 平台：管理员、RBAC、玩家与经济管理、配置中心、邮件、活动、审计和基础运营数据。
+- PostgreSQL 是权威数据存储。Redis 用于缓存、限流和排行榜读取加速；S3/OSS + CDN 用于存放配置负载和资源。
+- V1 不包含消息代理、Kubernetes、支付或实时战斗服务器。
 
-## Housekeeping
+## 文档维护
 
-`api/openapi/player-api.yaml` is superseded by `game-api.yaml`. The file is a comment-only stub and should be removed with `git rm api/openapi/player-api.yaml`.
+`api/openapi/player-api.yaml` 已由 `game-api.yaml` 取代。该文件仅含注释，应通过 `git rm api/openapi/player-api.yaml` 删除。
 
-`docs/runbooks/` from the repository layout does not exist yet; the backup and restore runbook is a T20 deliverable.
+仓库布局中提及的 `docs/runbooks/` 目录目前不存在；备份与恢复手册属于 T20 交付项。
 
-## Status and change control
+## 状态与变更管理
 
-These documents define the design baseline, not an implemented system. No application code exists in this repository. The DDL has not been executed against PostgreSQL, the OpenAPI documents have not been run through a linter, and the Mermaid diagrams have not been rendered.
+这些文档定义的是设计基线，而非已实现的系统。本仓库没有应用代码。DDL 尚未在 PostgreSQL 中执行，OpenAPI 文档尚未通过 lint，Mermaid 图也尚未渲染。
 
-Decisions marked **Accepted** are the baseline. Changing service boundaries, identity isolation, data authority or authorization requires amending the relevant ADR and review before implementation. Topic documents are drafts until reviewed; their **(proposal)** items are listed as open questions in [decisions.md](architecture/decisions.md).
+标记为 **已接受** 的决策构成基线。变更服务边界、身份隔离、数据权威或授权机制，必须修订相应 ADR，并在实施前完成评审。主题文档在评审通过前均为草案；其中的 **（提案）** 项列在[决策文档](architecture/decisions.md)的待决问题中。
 
-DDL and OpenAPI are versioned artifacts. Apply schema changes through forward-only migrations; do not edit an applied migration in place.
+DDL 与 OpenAPI 均为版本化交付物。Schema 变更应通过只向前的迁移实施；不得原地修改已应用的迁移。

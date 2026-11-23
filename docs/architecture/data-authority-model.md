@@ -1,99 +1,99 @@
-# Data authority model
+﻿# 数据权威模型
 
-- **Status:** Draft for review (2026-11-23)
-- **Elaborates:** [ADR-0004](../adr/ADR-0004-data-authority-model.md)
-- **Source:** sections 1.3, 4.3, 4.5, 4.7 and 5.2 of the [technical design](../game-platform-technical-design.md)
+- **状态：** 评审草案（2026-11-23）
+- **细化：** [ADR-0004](../adr/ADR-0004-data-authority-model.md)
+- **来源：** [技术设计](../game-platform-technical-design.md)第 1.3、4.3、4.5、4.7 和 5.2 节
 
-Where this document and the ADR disagree, the ADR wins. Items marked **(proposal)** are not stated in the design document or an ADR and need confirmation.
+若本文档与 ADR 冲突，以 ADR 为准。标记为**（提案）**的内容未在设计文档或 ADR 中说明，尚待确认。
 
-## 1. Principle
+## 1. 原则
 
-Combat runs on the client. Everything the client computes can be forged. The server therefore owns every piece of data whose forgery would cost money, progress or fairness, and treats client input as a claim to be checked.
+战斗在客户端运行。客户端计算出的任何内容都可能被伪造。因此，所有伪造后会造成经济损失、进度损失或公平性问题的数据均由服务端掌握；客户端输入只视为待校验的声明。
 
-## 2. Authority matrix
+## 2. 权威矩阵
 
-| Data | Authority | Who may write | What the client can influence |
+| 数据 | 权威方 | 写入方 | 客户端可影响的内容 |
 |---|---|---|---|
-| Player identity, status, bans | Server | Login flow; GM ban and unban | Nothing |
-| Profile (nickname, avatar) | Server stores, player edits | Player, within validation | Its own nickname and avatar |
-| Save (`player_saves.save_data`) | Client-authored, server-stored | Player, with optimistic lock; GM restore | Everything inside the save; nothing outside it |
-| Currency balances | Server | Economy service only | Nothing directly |
-| Item quantities | Server | Economy service only | Nothing directly |
-| Wallet and item ledgers | Server, append-only | Economy service only | Nothing |
-| Permanent unlocks and entitlements | Server | Server-side rules | Nothing directly |
-| Run existence, level, rule version | Server | `POST /runs` | Which level it asks to play |
-| Run result | Client claim | Player submits, server validates | Score, win flag, duration, within what the server accepts |
-| Rewards of a run, ad, mail, activity | Server | Server computes from rules | Nothing; a client-sent reward is ignored |
-| Ad completion | Client claim, or WeChat server-side verification if adopted | Player submits; platform callback | Only the claim |
-| Config content | Server (GM publishes) | GM | Nothing |
-| Leaderboard scores | Server | Server, from accepted settlements or validated submissions | Indirectly through accepted results |
-| Analytics events | Client-reported, not authoritative | Player | Everything; never used to grant assets |
+| 玩家身份、状态和封禁 | 服务端 | 登录流程；GM 封禁和解封 | 无 |
+| 玩家资料（昵称、头像） | 服务端存储，玩家可编辑 | 玩家（须通过校验） | 自己的昵称和头像 |
+| 存档（`player_saves.save_data`） | 客户端编写，服务端存储 | 玩家（乐观锁）；GM 恢复 | 存档内部的所有内容，不能影响存档之外的数据 |
+| 货币余额 | 服务端 | 仅经济服务 | 无直接影响 |
+| 道具数量 | 服务端 | 仅经济服务 | 无直接影响 |
+| 钱包和道具流水 | 服务端，只追加 | 仅经济服务 | 无 |
+| 永久解锁内容和权益 | 服务端 | 服务端规则 | 无直接影响 |
+| 对局是否存在、关卡和规则版本 | 服务端 | `POST /runs` | 可选择请求游玩的关卡 |
+| 对局结果 | 客户端声明 | 玩家提交，服务端校验 | 分数、胜负标记和时长（以服务端接受范围为限） |
+| 对局、广告、邮件和活动奖励 | 服务端 | 服务端根据规则计算 | 无；忽略客户端提交的奖励值 |
+| 广告完成情况 | 客户端声明，或采用微信服务端验证 | 玩家提交；平台回调 | 仅能提交领取请求 |
+| 配置内容 | 服务端（由 GM 发布） | GM | 无 |
+| 排行榜分数 | 服务端 | 服务端根据已接受的结算或已验证提交生成 | 可通过已接受的结果间接影响 |
+| 分析事件 | 客户端上报，不具权威性 | 玩家 | 可任意影响；绝不用于发放资产 |
 
-## 3. Saves
+## 3. 存档
 
-- A save holds non-critical game state as JSONB with `schema_version` and `save_version`.
-- `PUT /api/v1/player/save` requires `If-Match` with the current `save_version`. A mismatch returns `412 SAVE_VERSION_CONFLICT`; the client reloads and decides how to merge.
-- Balances, items and entitlements are never read from a save. If a save contains a field named like an asset, the server ignores it.
-- Snapshots (`player_save_snapshots`) are taken on a schedule and before every GM restore. A restore replaces the save and increments `save_version`; it never touches wallets or items.
-- **(proposal)** Enforce a maximum save size per game (setting `save.max_bytes`, default 256 KB) and reject larger writes with `413`.
+- 存档以 JSONB 保存非关键游戏状态，并记录 `schema_version` 和 `save_version`。
+- `PUT /api/v1/player/save` 必须携带当前 `save_version` 对应的 `If-Match`。若版本不匹配，返回 `412 SAVE_VERSION_CONFLICT`；客户端需重新加载并决定如何合并。
+- 绝不从存档读取余额、道具或权益。若存档中含有类似资产字段的内容，服务端会忽略。
+- 按计划创建 `player_save_snapshots` 快照，并在每次 GM 恢复前创建快照。恢复时替换存档并递增 `save_version`；绝不修改钱包或道具。
+- **（提案）** 按游戏限制存档大小（设置 `save.max_bytes`，默认 256 KB）；拒绝超过限制的写入并返回 `413`。
 
-## 4. Run settlement
+## 4. 对局结算
 
-The server cannot prove from `score`, `is_win` or `reward` that combat happened. It can bound the damage.
+服务端无法根据 `score`、`is_win` 或 `reward` 证明战斗确实发生，但可以限制作弊造成的损失。
 
-| Check | Rule |
+| 校验项 | 规则 |
 |---|---|
-| Ownership | The run belongs to the token's player and game |
-| State | Status is `started`; a settled, expired or rejected run cannot be settled |
-| Time | Not past `expires_at`; **(proposal)** not faster than a per-level minimum duration from config |
-| Single settlement | `UNIQUE (game_id, run_id)` on `run_settlements` |
-| Idempotent replay | Same `Idempotency-Key` returns the stored result |
-| Costs | Entry costs (for example energy) are charged by the server, at creation or settlement, through the economy service |
-| Reward | Computed by the server from the rule version recorded on the run; capped per run and per day |
-| Plausibility | Score and progress within configured bounds for the level |
-| Risk signals | Abnormal scores and rapid repeated clears are recorded as `run_events` and can set `validation_status = 'review'` |
+| 所有权 | 对局属于令牌对应的玩家和游戏 |
+| 状态 | 状态必须为 `started`；已结算、过期或已拒绝的对局不得再次结算 |
+| 时间 | 不得晚于 `expires_at`；**（提案）** 不得短于配置中按关卡设置的最短时长 |
+| 单次结算 | `run_settlements` 上设置 `UNIQUE (game_id, run_id)` |
+| 幂等重放 | 使用相同 `Idempotency-Key` 时返回已存储的结果 |
+| 消耗 | 入场消耗（如体力）由服务端在创建对局时或结算时通过经济服务扣除 |
+| 奖励 | 服务端根据对局记录的规则版本计算，并设置单局和每日上限 |
+| 合理性 | 分数和进度必须在该关卡配置的范围内 |
+| 风险信号 | 异常分数和短时间重复通关记录为 `run_events`，并可将 `validation_status` 设为 `review` |
 
-`validation_status` is `accepted`, `rejected` or `review`. Only `accepted` grants rewards. V1 uses these lightweight checks. Server-side replay verification is considered for high-value modes and is not built in V1.
+`validation_status` 可为 `accepted`、`rejected` 或 `review`。只有 `accepted` 才发放奖励。V1 使用轻量校验；高价值玩法可考虑服务端回放验证，但 V1 不实现。
 
-## 5. Ad rewards
+## 5. 广告奖励
 
-Three levels of trust, weakest first:
+信任等级由低到高如下：
 
-| Level | Evidence | Status |
+| 等级 | 证据 | 状态 |
 |---|---|---|
-| 1 | Client reports `isEnded` in `onClose` | Baseline of the design |
-| 2 | Level 1 plus server-side session, expiry, daily limit, single claim, device and behaviour signals | V1 design |
-| 3 | WeChat's ad server calls the developer server when the reward condition is met (optional "服务端验证") | Not in the design; decision needed |
+| 1 | 客户端在 `onClose` 中上报 `isEnded` | 设计基线 |
+| 2 | 等级 1 加上服务端会话、过期时间、每日限额、单次领取、设备和行为信号 | V1 设计 |
+| 3 | 达到奖励条件时，由微信广告服务器回调开发者服务器（可选的“服务端验证”） | 设计未涵盖，待决 |
 
-Level 2 flow:
+等级 2 流程：
 
-1. `POST /api/v1/ads/sessions` creates an `ad_session` with an expiry after checking the placement and the remaining daily count.
-2. The client shows the ad.
-3. `POST /api/v1/ads/sessions/{session_id}/claim` checks player, game, placement, expiry, daily limit and that the session was not claimed, then grants through the economy service.
+1. `POST /api/v1/ads/sessions` 校验广告位和剩余每日次数后，创建带过期时间的 `ad_session`。
+2. 客户端展示广告。
+3. `POST /api/v1/ads/sessions/{session_id}/claim` 校验玩家、游戏、广告位、过期时间、每日限额和会话是否已领取，再通过经济服务发放奖励。
 
-Level 3 would add: the platform callback marks the session as server-verified, and the claim requires that mark. WeChat documents this mode at <https://developers.weixin.qq.com/minigame/dev/guide/security/antiadcheat.html>. Its request fields and signature scheme have not been reviewed for this document, and the current schema has no column for the verified state; adopting it needs a schema migration and a callback endpoint (see [service-boundaries.md](service-boundaries.md#5-third-party-callbacks)).
+若采用等级 3，平台回调会将会话标记为服务端已验证，领取操作也必须检查此标记。微信文档介绍了该模式。本文尚未评审其请求字段和签名方案，当前 Schema 也没有存储验证状态的字段；采用该模式需增加 Schema 迁移和回调端点（见[服务边界](service-boundaries.md#5-third-party-callbacks)）。
 
-Without level 3 the platform cannot promise that ad-reward cheating is fully prevented, so reward value per ad and per day stays low enough for the limits to protect.
+若不采用等级 3，平台就无法承诺彻底防止广告奖励作弊。因此，每次广告及每日奖励价值必须保持在限额能够控制的范围内。
 
-## 6. Storage authority
+## 6. 存储权威
 
-| Store | Role | If it is lost |
+| 存储 | 作用 | 丢失时的处理 |
 |---|---|---|
-| PostgreSQL | Authoritative for all business data, including leaderboards and jobs | Restore from backup and point-in-time recovery |
-| Redis | Cache, rate-limit counters, leaderboard read acceleration, short-lived denylist | Rebuild from PostgreSQL; rate limits reset; no ownership or balance changes |
-| S3 / OSS | Config payloads, assets, save backups | Config payloads are re-uploadable from `config_versions` when stored inline; otherwise restore from bucket versioning |
-| CDN | Delivery only | Refill from origin |
+| PostgreSQL | 所有业务数据（包括排行榜和任务）的权威存储 | 从备份恢复并使用时间点恢复 |
+| Redis | 缓存、限流计数、排行榜读取加速、短期拒绝名单 | 从 PostgreSQL 重建；限流计数重置；不影响所有权或余额 |
+| S3 / OSS | 配置负载、资源、存档备份 | 若配置负载内嵌于 `config_versions`，可重新上传；否则从存储桶版本恢复 |
+| CDN | 仅负责分发 | 从源站重新填充 |
 
-Rules:
+规则：
 
-- A write is complete when PostgreSQL commits, not when Redis is updated.
-- Redis locks never replace a database transaction or a unique constraint.
-- Leaderboard reads may come from a Redis sorted set; the set is rebuilt from `leaderboard_entries` by a worker job.
-- **(proposal)** Cache invalidation after a config release is driven by an outbox event, so a failed refresh is retried instead of lost.
+- PostgreSQL 提交后，写入才算完成；Redis 是否更新不影响提交结果。
+- Redis 锁绝不取代数据库事务或唯一约束。
+- 排行榜读取可以使用 Redis 有序集合；由 Worker 任务从 `leaderboard_entries` 重建。
+- **（提案）** 配置发布后通过 Outbox 事件失效缓存，以便刷新失败时重试，而不是丢失请求。
 
-## 7. What the client must be built to expect
+## 7. 客户端必须预期的行为
 
-- Any balance shown is a display copy; the next `bootstrap` or reward response overrides it.
-- A reward response lists what the server granted, which may be less than the client predicted.
-- Settlement and claim calls can be retried with the same `Idempotency-Key`.
-- A save write can be refused with a version conflict.
+- 界面显示的余额只是副本；下一次 `bootstrap` 或奖励响应会覆盖它。
+- 奖励响应会列出服务端实际发放的内容，可能少于客户端预测值。
+- 结算和领取请求可以使用相同的 `Idempotency-Key` 重试。
+- 存档写入可能因版本冲突被拒绝。

@@ -1,151 +1,151 @@
-# PostgreSQL ERD
+﻿# PostgreSQL 实体关系图（ERD）
 
-Baseline v2.0 (2026-11-23). This is a domain-level view of the 57 tables in 13 schemas defined by section 5.2 of the [technical design](../game-platform-technical-design.md). The executable source of truth is [schema.sql](schema.sql). Every game-owned table carries `game_id`, and composite foreign keys that include `game_id` prevent cross-game references.
+基线 v2.0（2026-11-23）。本文从领域层面展示[技术设计](../game-platform-technical-design.md)第 5.2 节定义的 13 个 Schema、57 张表。可执行的事实来源是[数据库结构文件](schema.sql)。每张游戏归属表均包含 `game_id`；包含 `game_id` 的复合外键可阻止跨游戏引用。
 
-## Table inventory
+## 数据表目录
 
-| Schema | Tables |
+| Schema | 数据表 |
 |---|---|
-| `platform` | `games`, `game_platform_apps`, `game_settings`, `game_environments` |
-| `auth` | `player_identities`, `player_sessions`, `login_records` |
-| `player` | `players`, `player_profiles`, `player_saves`, `player_save_snapshots`, `player_bans` |
-| `game` | `game_configs`, `config_versions`, `config_releases`, `config_release_items` |
-| `gameplay` | `game_runs`, `run_settlements`, `run_events` |
-| `economy` | `currency_definitions`, `wallets`, `wallet_transactions`, `item_definitions`, `player_items`, `item_transactions` |
-| `ads` | `ad_placements`, `ad_sessions`, `ad_reward_claims`, `ad_daily_limits` |
-| `operation` | `announcements`, `mail_messages`, `mail_attachments`, `player_mail`, `activities`, `activity_claims`, `reward_jobs` |
-| `ranking` | `leaderboards`, `leaderboard_entries`, `leaderboard_snapshots` |
-| `admin` | `admin_users`, `roles`, `permissions`, `admin_user_roles`, `role_permissions`, `admin_sessions`, `admin_mfa` |
-| `audit` | `admin_audit_logs`, `service_audit_logs` |
-| `analytics` | `game_events`, `daily_player_stats`, `daily_game_stats` |
-| `system` | `idempotency_keys`, `outbox_events`, `background_jobs`, `service_identities`, `service_credentials`, `service_game_grants` |
+| `platform` | `games`、`game_platform_apps`、`game_settings`、`game_environments` |
+| `auth` | `player_identities`、`player_sessions`、`login_records` |
+| `player` | `players`、`player_profiles`、`player_saves`、`player_save_snapshots`、`player_bans` |
+| `game` | `game_configs`、`config_versions`、`config_releases`、`config_release_items` |
+| `gameplay` | `game_runs`、`run_settlements`、`run_events` |
+| `economy` | `currency_definitions`、`wallets`、`wallet_transactions`、`item_definitions`、`player_items`、`item_transactions` |
+| `ads` | `ad_placements`、`ad_sessions`、`ad_reward_claims`、`ad_daily_limits` |
+| `operation` | `announcements`、`mail_messages`、`mail_attachments`、`player_mail`、`activities`、`activity_claims`、`reward_jobs` |
+| `ranking` | `leaderboards`、`leaderboard_entries`、`leaderboard_snapshots` |
+| `admin` | `admin_users`、`roles`、`permissions`、`admin_user_roles`、`role_permissions`、`admin_sessions`、`admin_mfa` |
+| `audit` | `admin_audit_logs`、`service_audit_logs` |
+| `analytics` | `game_events`、`daily_player_stats`、`daily_game_stats` |
+| `system` | `idempotency_keys`、`outbox_events`、`background_jobs`、`service_identities`、`service_credentials`、`service_game_grants` |
 
-## Platform, identity and player
-
-```mermaid
-erDiagram
-  GAMES ||--o{ GAME_PLATFORM_APPS : owns
-  GAMES ||--o{ GAME_SETTINGS : configures
-  GAMES ||--o{ GAME_ENVIRONMENTS : has
-  GAMES ||--o{ PLAYERS : contains
-  GAME_PLATFORM_APPS ||--o{ PLAYER_IDENTITIES : authenticates
-  PLAYERS ||--o{ PLAYER_IDENTITIES : has
-  PLAYERS ||--o{ PLAYER_SESSIONS : has
-  PLAYERS ||--o{ LOGIN_RECORDS : logs
-  PLAYERS ||--o| PLAYER_PROFILES : has
-  PLAYERS ||--o| PLAYER_SAVES : owns
-  PLAYERS ||--o{ PLAYER_SAVE_SNAPSHOTS : keeps
-  PLAYERS ||--o{ PLAYER_BANS : receives
-```
-
-## Configuration, gameplay and economy
+## 平台、身份与玩家
 
 ```mermaid
 erDiagram
-  GAMES ||--o{ GAME_CONFIGS : defines
-  GAME_CONFIGS ||--o{ CONFIG_VERSIONS : versions
-  GAMES ||--o{ CONFIG_RELEASES : publishes
-  CONFIG_RELEASES ||--|{ CONFIG_RELEASE_ITEMS : contains
-  CONFIG_VERSIONS ||--o{ CONFIG_RELEASE_ITEMS : "released as"
-  PLAYERS ||--o{ GAME_RUNS : plays
-  GAME_RUNS ||--o| RUN_SETTLEMENTS : settles
-  GAME_RUNS ||--o{ RUN_EVENTS : records
-  GAMES ||--o{ CURRENCY_DEFINITIONS : defines
-  CURRENCY_DEFINITIONS ||--o{ WALLETS : denominates
-  PLAYERS ||--o{ WALLETS : owns
-  WALLETS ||--o{ WALLET_TRANSACTIONS : records
-  GAMES ||--o{ ITEM_DEFINITIONS : defines
-  ITEM_DEFINITIONS ||--o{ PLAYER_ITEMS : instantiates
-  PLAYERS ||--o{ PLAYER_ITEMS : owns
-  PLAYER_ITEMS ||--o{ ITEM_TRANSACTIONS : records
+  GAMES ||--o{ GAME_PLATFORM_APPS : 拥有
+  GAMES ||--o{ GAME_SETTINGS : 配置
+  GAMES ||--o{ GAME_ENVIRONMENTS : 包含
+  GAMES ||--o{ PLAYERS : 包含
+  GAME_PLATFORM_APPS ||--o{ PLAYER_IDENTITIES : 认证
+  PLAYERS ||--o{ PLAYER_IDENTITIES : 拥有
+  PLAYERS ||--o{ PLAYER_SESSIONS : 拥有
+  PLAYERS ||--o{ LOGIN_RECORDS : 记录
+  PLAYERS ||--o| PLAYER_PROFILES : 拥有
+  PLAYERS ||--o| PLAYER_SAVES : 拥有
+  PLAYERS ||--o{ PLAYER_SAVE_SNAPSHOTS : 保存
+  PLAYERS ||--o{ PLAYER_BANS : 接受封禁
 ```
 
-## Ads, operations and ranking
+## 配置、玩法与经济系统
 
 ```mermaid
 erDiagram
-  GAMES ||--o{ AD_PLACEMENTS : defines
-  AD_PLACEMENTS ||--o{ AD_SESSIONS : serves
-  PLAYERS ||--o{ AD_SESSIONS : watches
-  AD_SESSIONS ||--o| AD_REWARD_CLAIMS : claims
-  AD_PLACEMENTS ||--o{ AD_DAILY_LIMITS : limits
-  PLAYERS ||--o{ AD_DAILY_LIMITS : counts
-  GAMES ||--o{ ANNOUNCEMENTS : publishes
-  GAMES ||--o{ MAIL_MESSAGES : publishes
-  MAIL_MESSAGES ||--o{ MAIL_ATTACHMENTS : carries
-  MAIL_MESSAGES ||--o{ PLAYER_MAIL : "delivered as"
-  PLAYERS ||--o{ PLAYER_MAIL : receives
-  GAMES ||--o{ ACTIVITIES : defines
-  ACTIVITIES ||--o{ ACTIVITY_CLAIMS : grants
-  PLAYERS ||--o{ ACTIVITY_CLAIMS : claims
-  GAMES ||--o{ REWARD_JOBS : schedules
-  BACKGROUND_JOBS ||--o| REWARD_JOBS : executes
-  GAMES ||--o{ LEADERBOARDS : defines
-  LEADERBOARDS ||--o{ LEADERBOARD_ENTRIES : ranks
-  PLAYERS ||--o{ LEADERBOARD_ENTRIES : scores
-  LEADERBOARDS ||--o{ LEADERBOARD_SNAPSHOTS : archives
+  GAMES ||--o{ GAME_CONFIGS : 定义
+  GAME_CONFIGS ||--o{ CONFIG_VERSIONS : 版本
+  GAMES ||--o{ CONFIG_RELEASES : 发布
+  CONFIG_RELEASES ||--|{ CONFIG_RELEASE_ITEMS : 包含
+  CONFIG_VERSIONS ||--o{ CONFIG_RELEASE_ITEMS : 发布为
+  PLAYERS ||--o{ GAME_RUNS : 参与
+  GAME_RUNS ||--o| RUN_SETTLEMENTS : 结算
+  GAME_RUNS ||--o{ RUN_EVENTS : 记录
+  GAMES ||--o{ CURRENCY_DEFINITIONS : 定义
+  CURRENCY_DEFINITIONS ||--o{ WALLETS : 计价
+  PLAYERS ||--o{ WALLETS : 拥有
+  WALLETS ||--o{ WALLET_TRANSACTIONS : 记录
+  GAMES ||--o{ ITEM_DEFINITIONS : 定义
+  ITEM_DEFINITIONS ||--o{ PLAYER_ITEMS : 生成实例
+  PLAYERS ||--o{ PLAYER_ITEMS : 拥有
+  PLAYER_ITEMS ||--o{ ITEM_TRANSACTIONS : 记录
 ```
 
-## Admin, audit, analytics and system
+## 广告、运营与排行榜
 
 ```mermaid
 erDiagram
-  ADMIN_USERS ||--o{ ADMIN_USER_ROLES : assigned
-  ROLES ||--o{ ADMIN_USER_ROLES : assigned
-  GAMES ||--o{ ADMIN_USER_ROLES : scopes
-  ROLES ||--o{ ROLE_PERMISSIONS : grants
-  PERMISSIONS ||--o{ ROLE_PERMISSIONS : included
-  ADMIN_USERS ||--o{ ADMIN_SESSIONS : has
-  ADMIN_USERS ||--o| ADMIN_MFA : enrolls
-  ADMIN_USERS ||--o{ ADMIN_AUDIT_LOGS : operates
-  SERVICE_IDENTITIES ||--o{ SERVICE_CREDENTIALS : holds
-  SERVICE_IDENTITIES ||--o{ SERVICE_GAME_GRANTS : authorized
-  GAMES ||--o{ SERVICE_GAME_GRANTS : scopes
-  SERVICE_IDENTITIES ||--o{ SERVICE_AUDIT_LOGS : operates
-  GAMES ||--o{ GAME_EVENTS : collects
-  GAMES ||--o{ DAILY_GAME_STATS : aggregates
-  PLAYERS ||--o{ DAILY_PLAYER_STATS : aggregates
-  GAMES ||--o{ BACKGROUND_JOBS : scopes
-  GAMES ||--o{ OUTBOX_EVENTS : emits
+  GAMES ||--o{ AD_PLACEMENTS : 定义
+  AD_PLACEMENTS ||--o{ AD_SESSIONS : 提供
+  PLAYERS ||--o{ AD_SESSIONS : 观看
+  AD_SESSIONS ||--o| AD_REWARD_CLAIMS : 领取
+  AD_PLACEMENTS ||--o{ AD_DAILY_LIMITS : 限制
+  PLAYERS ||--o{ AD_DAILY_LIMITS : 计数
+  GAMES ||--o{ ANNOUNCEMENTS : 发布
+  GAMES ||--o{ MAIL_MESSAGES : 发布
+  MAIL_MESSAGES ||--o{ MAIL_ATTACHMENTS : 携带
+  MAIL_MESSAGES ||--o{ PLAYER_MAIL : 投递
+  PLAYERS ||--o{ PLAYER_MAIL : 接收
+  GAMES ||--o{ ACTIVITIES : 定义
+  ACTIVITIES ||--o{ ACTIVITY_CLAIMS : 发放
+  PLAYERS ||--o{ ACTIVITY_CLAIMS : 领取
+  GAMES ||--o{ REWARD_JOBS : 调度
+  BACKGROUND_JOBS ||--o| REWARD_JOBS : 执行
+  GAMES ||--o{ LEADERBOARDS : 定义
+  LEADERBOARDS ||--o{ LEADERBOARD_ENTRIES : 排名
+  PLAYERS ||--o{ LEADERBOARD_ENTRIES : 提交分数
+  LEADERBOARDS ||--o{ LEADERBOARD_SNAPSHOTS : 归档
 ```
 
-`system.idempotency_keys` has no foreign keys; it is keyed by `(scope, idempotency_key)`.
+## 管理、审计、分析与系统
 
-## Relationship and key rules
+```mermaid
+erDiagram
+  ADMIN_USERS ||--o{ ADMIN_USER_ROLES : 分配
+  ROLES ||--o{ ADMIN_USER_ROLES : 分配
+  GAMES ||--o{ ADMIN_USER_ROLES : 限定范围
+  ROLES ||--o{ ROLE_PERMISSIONS : 授权
+  PERMISSIONS ||--o{ ROLE_PERMISSIONS : 纳入
+  ADMIN_USERS ||--o{ ADMIN_SESSIONS : 拥有
+  ADMIN_USERS ||--o| ADMIN_MFA : 注册
+  ADMIN_USERS ||--o{ ADMIN_AUDIT_LOGS : 操作
+  SERVICE_IDENTITIES ||--o{ SERVICE_CREDENTIALS : 持有
+  SERVICE_IDENTITIES ||--o{ SERVICE_GAME_GRANTS : 获授权
+  GAMES ||--o{ SERVICE_GAME_GRANTS : 限定范围
+  SERVICE_IDENTITIES ||--o{ SERVICE_AUDIT_LOGS : 操作
+  GAMES ||--o{ GAME_EVENTS : 收集
+  GAMES ||--o{ DAILY_GAME_STATS : 汇总
+  PLAYERS ||--o{ DAILY_PLAYER_STATS : 汇总
+  GAMES ||--o{ BACKGROUND_JOBS : 限定范围
+  GAMES ||--o{ OUTBOX_EVENTS : 发出
+```
 
-- `platform.games.id` is the game namespace. `player.players` has the composite unique key `(game_id, id)` that every player-owned table references.
-- External identity uniqueness is `(game_id, platform, app_id, openid)`. `unionid` is stored but is never a cross-game account key.
-- `(platform, app_id)` is unique in `platform.game_platform_apps`, so the server resolves `game_id` from the platform app at login instead of trusting a client-supplied `game_id`.
-- Wallet balance is a projection; `economy.wallet_transactions` is the immutable ledger. The same holds for `player_items` and `item_transactions`. Both ledgers and both audit tables reject `UPDATE`/`DELETE` through the `system.reject_mutation()` trigger in addition to privileges.
-- A game run can be settled at most once: `UNIQUE (game_id, run_id)` on `gameplay.run_settlements`.
-- An ad session can be claimed at most once: `UNIQUE (game_id, session_id)` on `ads.ad_reward_claims`.
-- A config release is immutable. Rollback inserts a new release whose items reference older versions. The active version of a config is the item of the release with the highest `release_no`.
-- Admin authorization is role + permission + scope. Platform-wide scope is an explicit `scope_type = 'platform'` row, never an implicit `NULL`.
-- `operation.reward_jobs` is the business record of a batch grant; execution state lives in `system.background_jobs` and is driven by `game-worker`.
-- PostgreSQL is authoritative for leaderboards; Redis only accelerates reads.
+`system.idempotency_keys` 没有外键；其复合键为 `(scope, idempotency_key)`。
 
-## Deviations from the design document
+## 关系与键规则
 
-Section 5.2 of the design document lists logical key fields. The DDL keeps every table name and makes the following adjustments. Each one is a refinement needed for the constraints to hold, not a change of intent.
+- `platform.games.id` 是游戏命名空间。`player.players` 使用复合唯一键 `(game_id, id)`，所有玩家归属表都引用此键。
+- 外部身份唯一键为 `(game_id, platform, app_id, openid)`。会存储 `unionid`，但它绝不作为跨游戏账号关联键。
+- `platform.game_platform_apps` 中 `(platform, app_id)` 唯一，因此登录时由服务端根据平台应用解析 `game_id`，而不信任客户端传入的 `game_id`。
+- 钱包余额是投影；`economy.wallet_transactions` 是不可变流水。`player_items` 与 `item_transactions` 也采用相同设计。两个流水表和两个审计表除了受权限限制外，还通过 `system.reject_mutation()` 触发器拒绝 `UPDATE`/`DELETE`。
+- 每场游戏对局最多结算一次：`gameplay.run_settlements` 上设置 `UNIQUE (game_id, run_id)`。
+- 每个广告会话最多领取一次：`ads.ad_reward_claims` 上设置 `UNIQUE (game_id, session_id)`。
+- 配置发布不可变。回滚时插入新发布记录，其发布项引用旧版本。某配置当前启用的版本，是具有最高 `release_no` 的发布记录中对应的发布项。
+- 管理员授权按角色 + 权限 + 范围判断。平台级范围由 `scope_type = 'platform'` 明确表示，绝不隐式使用 `NULL`。
+- `operation.reward_jobs` 是批量发放的业务记录；执行状态保存在 `system.background_jobs`，并由 `game-worker` 驱动。
+- PostgreSQL 是排行榜的权威数据源；Redis 仅用于加速读取。
 
-| Table | Design document | schema.sql | Reason |
+## 与设计文档的差异
+
+设计文档第 5.2 节列出逻辑键字段。DDL 保留所有表名，并作出以下调整。每项调整都是为满足约束而进行的细化，不改变设计意图。
+
+| 表 | 设计文档 | schema.sql | 原因 |
 |---|---|---|---|
-| `platform.game_settings` | `key`, `value` | `setting_key`, `setting_value` | Avoid keyword-like column names |
-| `player.player_profiles` | `avatar` | `avatar_url` | The column stores a URL |
-| `game.config_releases` | `version_id` on the release | Removed; versions are referenced only through `config_release_items` | Having it in both places allows the header and the items to disagree |
-| `game.config_release_items` | `release_id, config_id, version_id` | Adds `game_id` | Composite foreign keys |
-| `economy.wallet_transactions` | `UNIQUE (game_id, source_type, source_id, transaction_type)` | `UNIQUE (game_id, player_id, currency_code, source_type, source_id, transaction_type)`; `amount` is positive with a separate `direction` | The shorter key rejects a settlement that grants two currencies, and a batch job that pays many players from one `source_id` |
-| `economy.item_transactions` | Same as above | `UNIQUE (game_id, player_id, item_id, source_type, source_id, transaction_type)` | Same reason |
-| `economy.wallets` | "No negative balance unless the currency allows it" | `CHECK (balance >= 0)` for every currency | Database constraint as the final defence; a currency that must go negative needs an ADR amendment and a migration |
-| `ads.ad_daily_limits` | `date`, `count` | `limit_date`, `claim_count` | Avoid keyword-like column names |
-| `operation.announcements` | `game_id` | Adds `scope` (`global` / `game`); `game_id` is `NULL` only for `global` | The design requires both global and game announcements |
-| `operation.mail_attachments` | `id, mail_id, …` | Adds `game_id` | Composite foreign keys |
-| `ranking.leaderboard_entries` | `game_id, board_id, player_id` | Adds `period_key` to the primary key | Daily/weekly/season boards need one entry per period |
-| `admin.admin_user_roles` | `admin_id, role_id, game_id` | Adds `scope_type` | Explicit platform scope instead of `NULL` meaning "all games" |
-| `audit.admin_audit_logs` | `target` | `target_type`, `target_id` | Queryable target |
-| `system.idempotency_keys` | `key`, `response` | `idempotency_key`, `response_status`, `response_body`, `state` | Replay of the stored response and in-flight detection |
-| `system.service_credentials` | `credential_hash` | `credential_hash` (mTLS certificate fingerprint) plus `access_key_id` and `secret_ref` for HMAC | HMAC signatures cannot be verified from a one-way hash of the secret; the secret stays in the secret manager |
+| `platform.game_settings` | `key`、`value` | `setting_key`、`setting_value` | 避免使用类似关键字的列名 |
+| `player.player_profiles` | `avatar` | `avatar_url` | 该列存储 URL |
+| `game.config_releases` | 发布记录上的 `version_id` | 移除；版本仅通过 `config_release_items` 引用 | 两处同时保存会导致发布头与发布项不一致 |
+| `game.config_release_items` | `release_id, config_id, version_id` | 增加 `game_id` | 支持复合外键 |
+| `economy.wallet_transactions` | `UNIQUE (game_id, source_type, source_id, transaction_type)` | `UNIQUE (game_id, player_id, currency_code, source_type, source_id, transaction_type)`；`amount` 为正数，另设 `direction` | 较短的唯一键会拒绝一次结算发放多种货币，以及一个批处理任务使用同一 `source_id` 向多名玩家付款 |
+| `economy.item_transactions` | 同上 | `UNIQUE (game_id, player_id, item_id, source_type, source_id, transaction_type)` | 原因相同 |
+| `economy.wallets` | “除非货币允许，否则余额不能为负” | 所有货币均设置 `CHECK (balance >= 0)` | 由数据库约束提供最终防护；需允许负余额的货币须修订 ADR 并执行迁移 |
+| `ads.ad_daily_limits` | `date`、`count` | `limit_date`、`claim_count` | 避免使用类似关键字的列名 |
+| `operation.announcements` | `game_id` | 增加 `scope`（`global` / `game`）；仅 `global` 时 `game_id` 为 `NULL` | 设计同时要求全局公告和游戏公告 |
+| `operation.mail_attachments` | `id, mail_id, …` | 增加 `game_id` | 支持复合外键 |
+| `ranking.leaderboard_entries` | `game_id, board_id, player_id` | 主键增加 `period_key` | 日榜、周榜和赛季榜需在各周期内分别记录玩家条目 |
+| `admin.admin_user_roles` | `admin_id, role_id, game_id` | 增加 `scope_type` | 显式表示平台范围，不用 `NULL` 表示“所有游戏” |
+| `audit.admin_audit_logs` | `target` | `target_type`、`target_id` | 便于查询目标 |
+| `system.idempotency_keys` | `key`、`response` | `idempotency_key`、`response_status`、`response_body`、`state` | 支持重放已保存响应和检测进行中的请求 |
+| `system.service_credentials` | `credential_hash` | `credential_hash`（mTLS 证书指纹），并增加 HMAC 使用的 `access_key_id` 和 `secret_ref` | HMAC 签名无法通过密钥的单向哈希验证；密钥保存在密钥管理器中 |
 
-## Status
+## 状态
 
-The DDL is a design baseline. It has not yet been executed against PostgreSQL, and grants, RLS and migration ordering are still to be delivered in tasks T03 and T21.
+DDL 目前是设计基线，尚未在 PostgreSQL 中执行。授权、RLS 和迁移顺序仍需在 T03 和 T21 中交付。
