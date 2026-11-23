@@ -1,0 +1,88 @@
+openapi: 3.1.0
+info:
+  title: Game Platform Internal API
+  version: 1.0.0
+  description: Private workload-to-workload contract. Reserved for independently deployed workers and trusted internal producers; disabled in the MVP until provisioned.
+servers:
+  - url: https://internal.example.net
+security:
+  - WorkloadBearer: []
+paths:
+  /internal/v1/health/ready:
+    get:
+      security: []
+      operationId: readiness
+      summary: Private readiness probe
+      responses:
+        '200': { description: Ready }
+        '503': { description: Not ready }
+  /internal/v1/jobs/{jobId}/execute:
+    post:
+      operationId: executeJob
+      summary: Execute a claimed background job
+      description: Reserved. Requires worker identity, job ownership/lease validation, allowlisted job type, and idempotency. Not enabled until a worker service is deployed.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseToken]
+              properties:
+                leaseToken: { type: string }
+                input: { type: object }
+      responses:
+        '202': { description: Accepted for execution }
+        '401': { description: Invalid workload identity }
+        '403': { description: Worker is not authorized for this job type or game scope }
+        '409': { description: Lease expired, job already completed, or idempotency conflict }
+  /internal/v1/events/ingest:
+    post:
+      operationId: ingestTrustedEvents
+      summary: Ingest events from trusted internal producers
+      description: Reserved. Producers require explicit event-type allowlists, game scope, payload limits, and deduplication.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gameId, events]
+              properties:
+                gameId: { type: string, format: uuid }
+                events:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [eventId, eventType, occurredAt, payload]
+                    properties:
+                      eventId: { type: string }
+                      eventType: { type: string }
+                      occurredAt: { type: string, format: date-time }
+                      payload: { type: object }
+      responses:
+        '202': { description: Events accepted }
+        '400': { description: Invalid or disallowed event payload }
+        '403': { description: Producer lacks game or event-type scope }
+components:
+  securitySchemes:
+    WorkloadBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived service token with aud=game-platform-internal, service subject, and explicit scopes. Prefer mTLS workload identity where available.

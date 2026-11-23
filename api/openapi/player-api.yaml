@@ -1,0 +1,439 @@
+openapi: 3.1.0
+info:
+  title: Game Platform Player API
+  version: 1.0.0
+  description: Public client API. Game scope is resolved from trusted app configuration and the authenticated player token.
+servers:
+  - url: https://api.example.com
+security:
+  - PlayerBearer: []
+tags:
+  - name: Auth
+  - name: Player
+  - name: Config
+  - name: Gameplay
+  - name: Economy
+  - name: Ads
+  - name: Operations
+paths:
+  /api/v1/auth/wechat:
+    post:
+      tags: [Auth]
+      operationId: wechatLogin
+      security: []
+      summary: Exchange a WeChat login code for platform tokens
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, appId]
+              properties:
+                code: { type: string, minLength: 1 }
+                appId: { type: string }
+                deviceId: { type: string }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: Rotated tokens
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      responses:
+        '204': { description: Session revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/player/me:
+    get:
+      tags: [Player]
+      operationId: getMyProfile
+      responses:
+        '200':
+          description: Current player profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+  /api/v1/player/bootstrap:
+    get:
+      tags: [Player]
+      operationId: bootstrap
+      summary: Fetch initial player state and current published configuration references
+      responses:
+        '200':
+          description: Bootstrap payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  player: { $ref: '#/components/schemas/PlayerProfile' }
+                  configVersion: { type: string }
+                  saveVersion: { type: integer, format: int64 }
+                  currencies:
+                    type: array
+                    items: { $ref: '#/components/schemas/Wallet' }
+  /api/v1/config/{configKey}:
+    get:
+      tags: [Config]
+      operationId: getConfig
+      security: []
+      parameters:
+        - name: configKey
+          in: path
+          required: true
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          schema: { type: string }
+      responses:
+        '200':
+          description: Config payload or object reference
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: integer }
+                  checksum: { type: string }
+                  payload: {}
+                  downloadUrl: { type: string, format: uri }
+        '304': { description: Not modified }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/player/save:
+    get:
+      tags: [Player]
+      operationId: getSave
+      responses:
+        '200':
+          description: Save data
+          headers:
+            ETag: { schema: { type: string, example: '"save-12"' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Save' }
+    put:
+      tags: [Player]
+      operationId: updateSave
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schemaVersion, data]
+              properties:
+                schemaVersion: { type: integer, minimum: 1 }
+                data: { type: object }
+      responses:
+        '200':
+          description: Save updated
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Save' }
+        '412': { description: Save version conflict }
+  /api/v1/game-runs:
+    post:
+      tags: [Gameplay]
+      operationId: startGameRun
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string }
+                levelId: { type: string }
+      responses:
+        '201':
+          description: Run created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameRun' }
+    get:
+      tags: [Gameplay]
+      operationId: listGameRuns
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Run page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameRunPage' }
+  /api/v1/game-runs/{runId}/settlement:
+    post:
+      tags: [Gameplay]
+      operationId: settleGameRun
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [result]
+              properties:
+                result: { type: object, description: Untrusted client result summary; server validates reward eligibility. }
+                clientProof: { type: object }
+      responses:
+        '200':
+          description: Settlement result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: boolean }
+                  reward: { type: object }
+                  settlementId: { type: string, format: uuid }
+        '409': { description: Run already settled or invalid state }
+  /api/v1/wallets:
+    get:
+      tags: [Economy]
+      operationId: listWallets
+      responses:
+        '200':
+          description: Wallet balances
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Wallet' }
+  /api/v1/wallets/transactions:
+    get:
+      tags: [Economy]
+      operationId: listWalletTransactions
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Wallet ledger page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WalletTransactionPage' }
+  /api/v1/ads/{placementCode}/prepare:
+    post:
+      tags: [Ads]
+      operationId: prepareAdReward
+      parameters:
+        - name: placementCode
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Ad session prepared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  expiresAt: { type: string, format: date-time }
+  /api/v1/ads/sessions/{sessionId}/claim:
+    post:
+      tags: [Ads]
+      operationId: claimAdReward
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientReportedCompleted: { type: boolean }
+      responses:
+        '200':
+          description: Claim decision; client callback alone is not cryptographic proof
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  granted: { type: boolean }
+                  reward: { type: object }
+        '409': { description: Duplicate or ineligible claim }
+  /api/v1/operations/mail:
+    get:
+      tags: [Operations]
+      operationId: listMyMail
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Player mail page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MailPage' }
+  /api/v1/operations/mail/{mailId}/claim:
+    post:
+      tags: [Operations]
+      operationId: claimMail
+      parameters:
+        - name: mailId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Mail reward claim result }
+        '409': { description: Already claimed or expired }
+components:
+  securitySchemes:
+    PlayerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  schemas:
+    AuthResponse:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, player]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: integer }
+        player: { $ref: '#/components/schemas/PlayerProfile' }
+    PlayerProfile:
+      type: object
+      required: [playerId, status]
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        avatarUrl: { type: string, format: uri }
+        status: { type: string, enum: [active, banned] }
+    Save:
+      type: object
+      properties:
+        schemaVersion: { type: integer }
+        saveVersion: { type: integer, format: int64 }
+        data: { type: object }
+    Wallet:
+      type: object
+      required: [currencyCode, balance]
+      properties:
+        currencyCode: { type: string }
+        balance: { type: integer, format: int64, minimum: 0 }
+    GameRun:
+      type: object
+      properties:
+        runId: { type: string, format: uuid }
+        mode: { type: string }
+        status: { type: string }
+        expiresAt: { type: string, format: date-time }
+    GameRunPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GameRun' } }
+        nextCursor: { type: string, nullable: true }
+    WalletTransactionPage:
+      type: object
+      properties:
+        items: { type: array, items: { type: object } }
+        nextCursor: { type: string, nullable: true }
+    MailPage:
+      type: object
+      properties:
+        items: { type: array, items: { type: object } }
+        nextCursor: { type: string, nullable: true }
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid player credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit exceeded
