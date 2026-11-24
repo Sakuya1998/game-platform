@@ -1,4 +1,4 @@
-﻿# 内部 API 指南
+# 内部 API 指南
 
 - **状态：** 评审草案（2026-11-23）。**该服务仅作预留，V1 不部署。**
 - **契约：** [`api/openapi/internal-api.yaml`](../../api/openapi/internal-api.yaml) 是事实来源。
@@ -98,4 +98,4 @@ X-Signature    = hex(hmac_sha256(secret, string_to_sign))
 
 ## 7. 第三方回调
 
-来自微信或广告平台的请求不是内部调用。它们从公网到达，使用平台自有签名机制，路由前缀为 `/platform-callbacks/v1`。详见[服务边界](../architecture/service-boundaries.md#5-third-party-callbacks)。
+来自微信或广告平台的请求不是内部调用。它们从公网到达，使用平台自有签名机制，路由前缀为 `/platform-callbacks/v1`。详见[服务边界](../architecture/service-boundaries.md#5-第三方回调)。

@@ -1,4 +1,4 @@
-﻿# 认证与授权
+# 认证与授权
 
 - **状态：** 评审草案（2026-11-23）
 - **细化：** [ADR-0003](../adr/ADR-0003-player-account-model.md)、[ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)
@@ -42,11 +42,11 @@
 ### 2.3 刷新、登出和撤销
 
 - 刷新时轮换令牌：已提交的令牌被消费；创建新的会话记录，并通过 `rotated_from` 指向旧会话；旧会话被撤销。
-- **（提案）** 重用检测：若提交的 refresh token 对应的会话已轮换或撤销，则撤销该玩家的整条会话链，因为这可能表示令牌已被复制。
+- 玩家和 GM 均启用重用检测。若刷新令牌对应的会话已轮换或撤销，则拒绝刷新并在事务内撤销同一会话链。原会话加锁，至多签发一个后继令牌。用于重用检测的哈希保留至会话链到期。
 - 登出时撤销当前会话。
 - 封禁玩家时撤销其所有会话。
 
-Access token 在密码学上仍然有效，直到其过期；因此封禁或登出后最长可能仍有效一小时。**（提案）** 使用以会话 ID 为键、有效期等于 access token 剩余有效期的短时 Redis 拒绝名单，并由 `playerauth` 检查以缩短此窗口。Redis 不可用时，资产变更路由回退到数据库检查。
+玩家和 GM 认证中间件均检查按安全平面和会话 ID 隔离的 Redis 拒绝名单，TTL 覆盖访问令牌剩余有效期。会话撤销以 PostgreSQL 为权威。缓存不可用或无法可靠判断撤销状态时查数据库，无法确认有效会话时拒绝请求。
 
 ### 2.4 玩家授权
 
@@ -58,7 +58,7 @@ Access token 在密码学上仍然有效，直到其过期；因此封禁或登�
 
 1. 使用用户名和密码调用 `POST /gm/v1/auth/login`。成功后返回短时、单次使用的 `challenge_token`，而不是 access token。
 2. 使用 challenge token 和 TOTP 或恢复码调用 `POST /gm/v1/auth/mfa/verify`。成功后服务端创建包含 `mfa_verified_at` 的 `admin.admin_sessions` 记录，并返回令牌。
-3. 尚未注册 MFA 的管理员必须先完成注册，才会签发任何令牌。**（提案）** 生产环境强制所有管理员启用 MFA。
+3. 尚未注册 MFA 的管理员用密码挑战领取短时注册令牌，并用首个 TOTP 验证码确认注册。只有验证成功后签发会话令牌。V1 强制所有管理员启用 MFA。
 
 | 控制项 | 规则 |
 |---|---|
@@ -66,7 +66,7 @@ Access token 在密码学上仍然有效，直到其过期；因此封禁或登�
 | 锁定 | 用户记录保存 `failed_login_count` 和 `locked_until`；连续失败后锁定（**提案：** 失败 5 次后锁定 15 分钟） |
 | MFA 密钥 | 使用 KMS 管理的密钥加密，存于 `admin.admin_mfa.secret_encrypted` |
 | Access token | 15–30 分钟 |
-| Refresh token | 有效期由安全策略决定；哈希存储、轮换且可撤销 |
+| Refresh token | 自首次签发起最长 7 天，轮换不延长上限。哈希存储，可撤销 |
 | 网络 | 可行时在 `gm-api` 前配置 VPN、零信任网络或 IP 允许列表 |
 
 ### 3.2 RBAC 评估
@@ -114,7 +114,7 @@ V1 不部署该平面；保留相关表和 `serviceauth` 抽象，以便未来�
 
 ## 5. 第三方调用方
 
-微信和广告平台回调使用平台自有签名机制认证，不签发任何平面的令牌。详见[服务边界](service-boundaries.md#5-third-party-callbacks)。
+微信和广告平台回调使用平台自有签名机制认证，不签发任何平面的令牌。详见[服务边界](service-boundaries.md#5-第三方回调)。
 
 ## 6. 从凭据构造 Actor
 

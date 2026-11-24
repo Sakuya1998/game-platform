@@ -57,6 +57,7 @@ flowchart LR
 | [ADR-0007](../adr/ADR-0007-economy-transaction-model.md) | 余额与不可变流水；幂等的单一写入路径；GM 调账 | ADR-004 的部分内容 |
 | [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md) | Worker 直接调用 `gamecore`；内部 API 预留 | ADR-002 |
 | [ADR-0009](../adr/ADR-0009-async-job-model.md) | 基于 PostgreSQL 的任务与 Outbox；不引入消息代理 | ADR-008 的部分内容 |
+| [ADR-0010](../adr/ADR-0010-v1-decision-baseline.md) | 2026-11-24 确认的 V1 实施决策与发布门禁 | — |
 
 变更决策时，必须修订对应 ADR，并在实施前完成评审。实施工作不得悄然改写已接受的 ADR。
 
@@ -114,18 +115,10 @@ game-platform/
 - 备份 PostgreSQL 并测试恢复；维护备份与恢复手册。
 - 在可行时，将 `gm-api` 部署在 VPN、零信任网络或 IP 允许列表之后，并同时启用 MFA 和限流。
 
-## 8. 生产前需解决的待决问题
+## 8. V1 实施决策与发布门禁
 
-1. 微信应用凭据的轮换和归属管理流程。
-2. 哪个进程承载 `/platform-callbacks/v1`，以及 V1 是否实现任何回调。[服务边界](service-boundaries.md#5-third-party-callbacks)列出了场景与选项；ADR-0005 假设在 `game-api` 中配置独立路由组。
-3. V1 是否采用微信可选的服务端激励广告验证。微信说明了该模式；其请求字段和签名方案尚未在此评审。采用该功能需要回调端点及 `ads.ad_sessions` 中的一个字段。
-4. 首款游戏中的高价值战斗奖励是否需要服务端回放验证。
-5. GM 调账需要双人审批的金额门槛，以及该增强功能的上线时间。
-6. 玩家标识、事件数据、流水和审计日志的保留策略。
-7. 目标区域、RPO/RTO、数据驻留要求和预期并发量。
-8. GM refresh token 有效期（ADR-0003 留给安全策略决定）。
-9. [RBAC 矩阵](../security/rbac-matrix.md)中的角色到权限映射，以及[数据库角色与授权](../database/database-roles-and-grants.md)中的授权矩阵均为待确认提案。
-10. 主题文档中标记为**（提案）**的事项：会话拒绝名单、refresh token 重用检测、钱包写入路径（Repository 规范或 `SECURITY DEFINER` 函数）、首批启用 RLS 的表、退避和租约数值。
-11. GM 菜单暗示但 API 表格未列出的端点：GM 登出和 MFA 注册、道具调整、邮件之外的批量奖励、活动和公告的列表/编辑/发布、排行榜创建和重建、任务进度及手动重试。玩家端还缺少标记邮件已读的能力。
+2026-11-24 确认的 11 项决策见 [ADR-0010](../adr/ADR-0010-v1-decision-baseline.md)。各子系统的范围、契约和验收任务见[实施路线图](../implementation/roadmap.md)。
 
-这些问题是实施门禁，不得擅自编造生产环境默认值。
+- 生产前确认目标市场、最终数据保留与删除规则、数据驻留要求、部署区域和峰值并发。
+- 高价值玩法上线前确定校验方式与奖励上限。
+- 其余标为**提案**的细节在对应实施阶段评审。生产发布须通过数据库授权与游戏隔离、API 契约、恢复演练和负载验收。

@@ -1,4 +1,4 @@
-﻿# 部署架构
+# 部署架构
 
 - **状态：** 评审草案（2026-11-23）
 - **细化：** [ADR-0001](../adr/ADR-0001-modular-monolith.md)、[ADR-0006](../adr/ADR-0006-postgresql-schema-design.md)、[ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)
@@ -111,7 +111,7 @@ flowchart TB
 - PostgreSQL：定期备份并支持时间点恢复；上线前及之后按计划演练恢复流程。
 - 对象存储：为配置负载启用存储桶版本控制。
 - Redis：无需备份，可从权威数据重建。
-- RPO、RTO 和部署区域仍待确定，详见[决策文档](decisions.md)。
+- V1 单区域部署。初始恢复目标为 RPO 15 分钟、RTO 4 小时，需通过演练验证。目标区域、驻留要求与峰值并发在发布前确认。详见 [ADR-0010](../adr/ADR-0010-v1-decision-baseline.md)。
 
 ## 10. 生产环境上线前检查
 

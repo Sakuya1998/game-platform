@@ -1,4 +1,4 @@
-﻿# ADR-0007 — 经济事务模型
+# ADR-0007 — 经济事务模型
 
 - **状态：** 已接受
 - **日期：** 2026-11-23
@@ -29,7 +29,7 @@ player_items  └── item_transactions
 - 最终保障依靠 PostgreSQL 流水唯一键，而非 Redis 锁：同一玩家同一货币的 `(source_type, source_id, transaction_type)` 只能生效一次。
 - 请求级重放通过 `Idempotency-Key` 和 `system.idempotency_keys` 处理。
 
-**唯一写入路径。** 无论请求来自哪个入口，所有资产变更都必须经过 `gamecore` 中的经济应用服务。每次调用都携带 `Actor`，流水记录 Actor 类型和 ID。
+**唯一写入路径。** 无论请求来自哪个入口，所有资产变更都必须经过 `gamecore` 中的经济应用服务。每次调用都携带 `Actor`，流水记录 Actor 类型和 ID。生产环境通过受控数据库函数同时写入资产状态和流水。详见 [ADR-0010](ADR-0010-v1-decision-baseline.md)。
 
 **GM 调账。**
 

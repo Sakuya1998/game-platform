@@ -981,7 +981,7 @@ CREATE TABLE analytics.daily_game_stats (
 -- ---------------------------------------------------------------------------
 -- RBAC 基线种子数据：权限代码和系统角色。
 -- 超出设计文档示例的权限代码标记为“（扩展）”；
--- 角色到权限的映射待定，详见 docs/security/rbac-matrix.md。
+-- 角色到权限的映射由 T15 按 docs/security/rbac-matrix.md 写入。
 -- ---------------------------------------------------------------------------
 
 INSERT INTO admin.permissions (code, description) VALUES
@@ -1003,6 +1003,8 @@ INSERT INTO admin.permissions (code, description) VALUES
     ('announcement.manage',  'Create and manage announcements (extension)'),
     ('ranking.read',         'View leaderboards (extension)'),
     ('ranking.manage',       'Manage and rebuild leaderboards (extension)'),
+    ('job.read',             '查询游戏范围内的 GM 后台任务'),
+    ('job.manage',           '取消或重试游戏范围内的 GM 后台任务'),
     ('analytics.read',       'View dashboards and analytics (extension)'),
     ('admin.read',           'View administrators and roles (extension)'),
     ('admin.manage',         'Create and manage administrators (extension)'),
@@ -1014,7 +1016,7 @@ INSERT INTO admin.roles (code, name, description, is_system) VALUES
     ('game_admin',       'Game Admin',       'Administration of assigned games', true),
     ('operator',         'Operator',         'Mail, announcements and activities', true),
     ('config_manager',   'Config Manager',   'Config editing and publishing', true),
-    ('customer_support', 'Customer Support', 'Player lookup and support operations', true),
+    ('customer_support', 'Customer Support', '获授权游戏的只读客服查询', true),
     ('analyst',          'Analyst',          'Read-only analytics', true),
     ('auditor',          'Auditor',          'Read-only audit access', true);
 

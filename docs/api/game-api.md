@@ -1,4 +1,4 @@
-﻿# 游戏 API 指南
+# 游戏 API 指南
 
 - **状态：** 评审草案（2026-11-23）
 - **契约：** [`api/openapi/game-api.yaml`](../../api/openapi/game-api.yaml) 是事实来源。本指南解释 YAML 无法表达的行为；若两者不一致，应修正本指南。
@@ -109,13 +109,14 @@
 | `POST /ads/sessions` | `Idempotency-Key` | 广告会话 |
 | `POST /ads/sessions/{session_id}/claim` | `Idempotency-Key`，且每个会话只能领取一次 | 领取记录、每日计数、奖励及流水 |
 
-`client_completed` 表示客户端观察到 `isEnded`。它是证据，但不是证明。详见[数据权威模型](../architecture/data-authority-model.md#5-ad-rewards)中的信任级别。
+`client_completed` 表示客户端观察到 `isEnded`。它是证据，但不是证明。详见[数据权威模型](../architecture/data-authority-model.md#5-广告奖励)中的信任级别。
 
 ### 邮件、活动、排行榜与事件
 
 | 操作 | 幂等方式 | 写入内容 |
 |---|---|---|
 | `GET /mails` | 读取，游标分页 | — |
+| `PUT /mails/{mail_id}/read` | 保留首次设置的 `read_at` | 当前玩家邮件的 `read_at` |
 | `POST /mails/{mail_id}/claim` | `Idempotency-Key`，且 `claimed_at` 仅设置一次 | `claimed_at`、附件及流水 |
 | `GET /activities` | 读取 | — |
 | `POST /activities/{activity_id}/claim` | `Idempotency-Key`，每项奖励仅可领取一次 | 领取记录、奖励及流水 |
@@ -126,7 +127,7 @@
 
 设计文档将排行榜路由写为 `/leaderboards/{id}`。契约使用 `board_code`，因为客户端从配置中获取排行榜代码，且没有列出排行榜 ID 的端点。
 
-契约没有将邮件标记为已读或删除邮件的端点。因此，`bootstrap` 中的 `unread_mail_count` 需要新增相应端点，或规定列出邮件即标记已读。此项尚待决定。
+列出邮件不会改变已读状态。客户端调用 `PUT /mails/{mail_id}/read` 后，`bootstrap` 的 `unread_mail_count` 按未删除且 `read_at` 为空的条目计算。已读操作与附件领取独立。
 
 ## 5. 分页
 

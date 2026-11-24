@@ -1,4 +1,4 @@
-﻿# 异步任务设计
+# 异步任务设计
 
 - **状态：** 评审草案（2026-11-23）
 - **细化：** [ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)、[ADR-0009](../adr/ADR-0009-async-job-model.md)
@@ -30,9 +30,8 @@ stateDiagram-v2
   [*] --> pending
   pending --> running: 领取
   running --> succeeded: 完成
-  running --> retrying: 失败，仍有重试次数
-  running --> failed: 失败，重试次数耗尽
-  running --> retrying: 租约过期
+  running --> retrying: 失败或租约过期，仍有重试次数
+  running --> failed: 失败或租约过期，重试次数耗尽
   retrying --> running: 退避后重新领取
   pending --> cancelled: 取消
   retrying --> cancelled: 取消
@@ -65,18 +64,18 @@ RETURNING *;
 
 ## 5. 租约、心跳与重新领取
 
-- 领取任务时设置租约（**提案：** 60 秒）。
-- Worker 执行期间刷新 `heartbeat_at` 和 `lease_expires_at`（**提案：** 每 20 秒一次）。
-- 每个 Worker 都会运行清理检查，将租约过期的 `running` 任务改为 `retrying`，并递增 `retry_count`。Worker 崩溃后，最多经过一个租约周期就会释放任务。
+- 领取任务时设置租约，默认 60 秒。
+- Worker 执行期间刷新 `heartbeat_at` 和 `lease_expires_at`，默认每 20 秒一次。
+- 每个 Worker 都检查租约。`running` 任务的租约过期后，按失败重试规则重新调度，重试额度耗尽则标为 `failed`。
 - Worker 发现自己已失去租约时，应停止处理，且不得将任务标记为完成。
 
 ## 6. 重试与退避
 
 - 每个任务独立设置 `max_retries`（Schema 默认值为 5）。
-- **（提案）** 退避规则：`run_at = now() + min(base × 2^retry_count, cap)`，其中 `base = 10 s`、`cap = 15 min`，再加入最多 20% 的抖动。
-- 失败时保存 `last_error`。当 `retry_count` 达到 `max_retries` 时，任务状态改为 `failed`。
+- 指数退避从 10 秒开始，加入最多 20% 的抖动，最终间隔不超过 15 分钟。首次重试的指数为 0。
+- 失败时保存 `last_error`。只有安排下一次重试时才递增 `retry_count`。初次执行不计入重试次数，耗尽重试次数后再次失败则标为 `failed`。
 - 不可能通过重试成功的错误（如校验失败、目标缺失）应立即失败。
-- 运营人员可在 GM 控制台重试失败任务或取消待处理任务；两项操作都需审计。设计要求支持手动重试，但 GM API 尚无对应端点。
+- GM API 按游戏范围提供任务查询、取消与重试。取消仅允许 `pending` 或 `retrying` 状态。手动重试仅允许 `failed` 状态，重置自动重试计数并保留任务 ID、业务幂等键与已处理进度。取消、重试均与审计同事务提交。
 
 ## 7. 幂等执行
 
@@ -94,10 +93,10 @@ RETURNING *;
 
 ## 8. 大批量任务
 
-涉及大量玩家的批处理使用一个任务分页执行，而不是每位玩家创建一个任务。
+涉及大量玩家的批处理使用一个任务分页执行。
 
 1. 任务载荷保存目标定义和游标（上次处理的玩家 ID）。
-2. 每轮载入一页（**提案：** 500 名玩家），在一个事务中处理；更新任务载荷中的游标和 `operation.reward_jobs` 计数器，然后发送心跳。
+2. 每轮载入一页（默认 500 名玩家），在一个事务中处理；更新任务载荷中的游标和 `operation.reward_jobs` 计数器，然后发送心跳。
 3. 崩溃后，下一个领取者从已保存的游标继续。中断页中的玩家会再次尝试处理，并由上述幂等键去重。
 
 `reward_jobs.target_count`、`processed_count` 和 `failed_count` 用于向运营人员展示进度。
@@ -143,7 +142,7 @@ V1 中 Outbox 没有外部订阅方。设置 Outbox 是为了确保“配置发�
 | 被重新领取的租约数量 | 发现 Worker 崩溃或过载 |
 | 未发布 Outbox 记录数及最早记录的等待时间 | 发现 Outbox 停滞 |
 
-完成的任务和已发布的 Outbox 记录在保留期后由 `expired_data_cleanup` 删除（**提案：** 30 天）。轮询会增加数秒延迟（**提案：** 空闲时每 2 秒轮询一次）；对这些任务类型可以接受。
+完成的任务和已发布的 Outbox 记录在保留期后由 `expired_data_cleanup` 删除（**提案：** 30 天）。轮询会增加数秒延迟（空闲时每 2 秒轮询一次）；对这些任务类型可以接受。
 
 ## 13. 扩展条件
 

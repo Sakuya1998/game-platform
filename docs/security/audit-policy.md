@@ -1,4 +1,4 @@
-﻿# 审计策略
+# 审计策略
 
 - **状态：** 评审草案
 - **相关：** [ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[ADR-0007](../adr/ADR-0007-economy-transaction-model.md)、[RBAC 矩阵](rbac-matrix.md)
@@ -21,14 +21,14 @@
 
 ### 2.1 每一项 GM 变更
 
-`gm-api` 的每项状态变更操作都必须在 `audit.admin_audit_logs` 中写入且仅写入一条记录。`action` 为授权该操作的权限代码。
+`gm-api` 的每项业务变更都必须在 `audit.admin_audit_logs` 中同事务写入一条记录。`action` 通常为授权该操作的权限代码。任务取消与重试、身份认证事件使用第 2.2 节的操作代码。
 
 | `action` | `target_type` | `before_data` / `after_data` |
 |---|---|---|
 | `game.manage` | `game`、`game_platform_app`、`game_environment`、`game_setting` | 变更字段；不含密钥，仅保存 `credential_ref` |
 | `player.ban`、`player.unban` | `player` | 状态和封禁记录 |
 | `player.save.restore` | `player_save` | 变更前后的 `save_version`、快照 ID；不含存档内容 |
-| `economy.grant`、`economy.deduct` | `wallet` | 货币、金额、变更前后余额、流水 ID |
+| `economy.grant`、`economy.deduct` | `wallet`、`player_item`、`reward_job` | 货币或道具、变更前后状态及流水 ID，或批量奖励任务 ID 与目标范围 |
 | `config.edit` | `game_config`、`config_version` | 键、版本、校验和；不含完整配置内容 |
 | `config.publish` | `config_release` | 发布 ID、类型、发布项、之前启用的版本 |
 | `mail.create` | `mail_message` | 标题、目标类型、附件 |
@@ -39,9 +39,9 @@
 | `admin.manage` | `admin_user` | 状态和角色分配；不含密码或 MFA 材料 |
 | `rbac.manage` | `role`、`admin_user_role` | 变更前后的权限集或分配关系 |
 
-### 2.2 GM 安全事件（提案）
+### 2.2 GM 安全与任务事件
 
-设计要求监控异常登录，但尚未为管理员登录历史定义专门的数据表。此类事件也写入同一张表，使用权限代码体系之外的操作代码：
+以下安全和任务事件写入同一张表，并使用独立于权限代码的操作代码。
 
 | `action` | 事件 |
 |---|---|
@@ -50,9 +50,9 @@
 | `auth.mfa_failed` | MFA 验证码错误 |
 | `auth.locked` | 多次失败后锁定账号 |
 | `auth.logout` | 管理员撤销会话 |
-| `auth.mfa_enrolled`、`auth.mfa_reset` | 注册或重置 MFA |
+| `auth.mfa_enrolled`、`auth.mfa_reset` | 注册或重置 MFA。注册审计与注册状态及会话同事务写入 |
 | `auth.password_changed` | 修改密码 |
-| `job.retry`、`job.cancel` | 手动操作后台任务 |
+| `job.retry`、`job.cancel` | `job.manage` 授权的手动操作，审计与任务状态同事务写入 |
 
 ### 2.3 服务调用
 
@@ -84,7 +84,7 @@
 审计记录中的任何列都不得保存以下内容：
 
 - 密码及密码哈希；
-- access token、refresh token、challenge token；
+- 访问令牌、刷新令牌、挑战令牌、MFA 注册令牌及配置 URI；
 - MFA 密钥和恢复码；
 - 微信 AppSecret、`session_key`、服务密钥和签名密钥；
 - 完整存档或配置内容（改为保存版本、校验和与 ID）。
@@ -96,7 +96,7 @@
 | 控制 | 说明 |
 |---|---|
 | 同一事务 | 审计记录与变更一起提交。若插入审计记录失败，操作也失败；不存在“变更成功但审计丢失”的情况 |
-| 通过权限只追加 | `gm_api_runtime` 仅有 `INSERT` 和 `SELECT` 权限；其他运行时角色无任何权限 |
+| 通过权限只追加 | `gm_api_runtime` 对管理员审计日志仅有 `INSERT` 和 `SELECT` 权限。其他运行时角色无写入权限 |
 | 通过触发器只追加 | `system.reject_mutation()` 拒绝 `UPDATE` 和 `DELETE` |
 | 对象所有权 | 数据表归 `NOLOGIN` 角色所有；常规操作中无人以所有者身份连接 |
 | 失败尝试 | 被拒绝的请求未更改数据，不写审计记录；改由指标和日志统计。失败登录除外（见第 2.2 节） |
@@ -112,9 +112,9 @@
 
 ## 7. 保留期限
 
-保留期限尚未确定，是[决策文档](../architecture/decisions.md)中的待决事项，取决于法律和业务要求。
+临时基线为审计记录 2 年、资产流水 7 年。发布前按目标市场批准最终保留、删除与匿名化规则。在最终规则获批前，临时基线用于容量和归档设计。详见 [ADR-0010](../adr/ADR-0010-v1-decision-baseline.md)。
 
-期限确定前不得删除审计记录。期限确定后：
+执行已批准策略时遵循下列规则。
 
 - 保留期内的记录绝不删除；
 - 更早的记录须先归档到对象存储，然后才能删除；

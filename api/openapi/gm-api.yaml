@@ -13,9 +13,8 @@ info:
     - 授权默认拒绝，并按管理员 + 权限代码 + 游戏范围进行评估。`x-required-permission` 指定
       每项操作所需的权限代码。只有确认管理员获准访问对应游戏后，才接受路径中的
       `game_id`。
-    - 每次变更都追加一条审计记录（操作员、游戏、操作、目标、变更前后值、
-      原因、请求 ID）。
-    - 变更操作必须携带 `Idempotency-Key`。高风险操作还必须提供 `reason`。
+    - 每次业务变更都在同一事务中追加审计记录。认证事件按审计策略单独记录。
+    - 业务变更必须携带 `Idempotency-Key`。高风险操作还必须提供 `reason`。
     - 批量操作（群发邮件、批量奖励）会创建后台任务并返回任务引用；
       绝不在当前请求中执行。
     - 响应使用 `{ code, message, data, request_id }` 信封。
@@ -33,6 +32,7 @@ tags:
   - name: Activity
   - name: Announcement
   - name: Ranking
+  - name: Jobs
   - name: Admin
   - name: RBAC
   - name: Audit
@@ -58,7 +58,7 @@ paths:
                 password: { type: string, format: password }
       responses:
         '200':
-          description: MFA 挑战。令牌由 `/auth/mfa/verify` 签发。
+          description: 已注册管理员使用 `/auth/mfa/verify`。首次注册成功后由 `/auth/mfa/enrollment/confirm` 签发会话。
           content:
             application/json:
               schema:
@@ -82,6 +82,7 @@ paths:
       tags: [Auth]
       operationId: verifyMfa
       summary: 验证 MFA 验证码并签发管理员会话
+      description: 仅接受已注册 MFA 的管理员及本次登录挑战令牌。
       security: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -831,6 +832,33 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /gm/v1/games/{game_id}/activities:
+    get:
+      tags: [Activity]
+      operationId: listGameActivitys
+      summary: 列出游戏活动
+      description: "按游戏范围和游标分页查询。"
+      x-required-permission: activity.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"type": "object", "required": ["items", "next_cursor"], "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Activity"}}, "next_cursor": {"type": ["string", "null"]}}}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
     post:
       tags: [Activity]
       operationId: createActivity
@@ -870,6 +898,33 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
   /gm/v1/games/{game_id}/announcements:
+    get:
+      tags: [Announcement]
+      operationId: listGameAnnouncements
+      summary: 列出游戏公告
+      description: "按游戏范围和游标分页查询。"
+      x-required-permission: announcement.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"type": "object", "required": ["items", "next_cursor"], "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Announcement"}}, "next_cursor": {"type": ["string", "null"]}}}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
     post:
       tags: [Announcement]
       operationId: createAnnouncement
@@ -907,6 +962,48 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /gm/v1/games/{game_id}/leaderboards:
+    post:
+      tags: [Ranking]
+      operationId: createLeaderboard
+      summary: 创建游戏排行榜
+      description: "在当前游戏中创建排行榜，board_code 必须唯一。操作记录审计。"
+      x-required-permission: ranking.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["board_code", "name", "period", "ranking_rule", "reason"]
+              additionalProperties: false
+              properties:
+                board_code: {"type": "string", "minLength": 1}
+                name: {"type": "string", "minLength": 1}
+                period: {"type": "string", "enum": ["all_time", "daily", "weekly", "monthly", "season"]}
+                ranking_rule: {"type": "object"}
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Leaderboard"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
     get:
       tags: [Ranking]
       operationId: list排行榜列表
@@ -1162,6 +1259,591 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /gm/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: adminLogout
+      summary: 撤销当前管理员会话
+      description: "撤销当前会话及其刷新令牌，并使本会话的访问令牌失效。会话注销操作本身幂等。"
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/auth/mfa/enrollment:
+    post:
+      tags: [Auth]
+      operationId: enrollAdminMfa
+      summary: 开始管理员 MFA 注册
+      description: "仅接受未完成 MFA 注册的管理员在密码验证后获得的单次挑战令牌。交换得到短时注册令牌及 TOTP 配置 URI。注册令牌只用于确认注册，URI 不得写入日志。"
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["challenge_token"]
+              additionalProperties: false
+              properties:
+                challenge_token: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"type": "object", "required": ["enrollment_token", "otpauth_uri"], "properties": {"enrollment_token": {"type": "string", "minLength": 1}, "otpauth_uri": {"type": "string", "format": "uri"}}}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/auth/mfa/enrollment/confirm:
+    post:
+      tags: [Auth]
+      operationId: confirmAdminMfaEnrollment
+      summary: 确认管理员 MFA 注册
+      description: "校验注册令牌和首个 TOTP 验证码。成功时在同一事务中消费注册令牌、启用 MFA、创建会话和审计。仅当确认成功才签发访问令牌和刷新令牌。"
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["enrollment_token", "code"]
+              additionalProperties: false
+              properties:
+                enrollment_token: {"type": "string", "minLength": 1}
+                code: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/AdminTokens"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/players/{player_id}/item-adjustments:
+    post:
+      tags: [Economy]
+      operationId: adjustPlayerItem
+      summary: 调整玩家道具数量
+      description: "正数发放、负数扣除。检查道具定义、库存和权限范围，并在同一事务中写入道具流水及审计。"
+      x-required-permission: economy.grant | economy.deduct
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["item_id", "amount", "reason"]
+              additionalProperties: false
+              properties:
+                item_id: {"type": "string", "minLength": 1}
+                amount: {"type": "integer", "format": "int64", "not": {"const": 0}}
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"type": "object", "required": ["item_id", "quantity", "transaction_id"], "properties": {"item_id": {"type": "string", "minLength": 1}, "quantity": {"type": "integer", "format": "int64", "minimum": 0}, "transaction_id": {"type": "string", "format": "uuid"}}}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/reward-jobs:
+    post:
+      tags: [Economy]
+      operationId: createBatchRewardJob
+      summary: 创建非邮件批量奖励任务
+      description: "校验游戏范围、受众和奖励定义，将奖励任务、后台任务和审计在同一事务中写入。Worker 分批发放，重复执行不得重复入账。目标为 player_list 时必须提供 player_ids。"
+      x-required-permission: economy.grant
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["target_type", "rewards", "reason"]
+              additionalProperties: false
+              properties:
+                target_type: {"type": "string", "enum": ["all_players", "player_list"]}
+                player_ids: {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "format": "uuid"}}
+                rewards: {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/Reward"}}
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '202':
+          description: 后台任务已接收
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/RewardJob"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/activities/{activity_id}:
+    put:
+      tags: [Activity]
+      operationId: updateGameActivity
+      summary: 编辑活动草稿
+      description: "仅允许编辑草稿，使发布中的规则和奖励保持稳定。要求 end_at 晚于 start_at。"
+      x-required-permission: activity.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "activity_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["name", "config", "start_at", "end_at"]
+              additionalProperties: false
+              properties:
+                name: {"type": "string", "minLength": 1}
+                config: {"type": "object"}
+                start_at: {"type": "string", "format": "date-time"}
+                end_at: {"type": "string", "format": "date-time"}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Activity"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/activities/{activity_id}/publish:
+    post:
+      tags: [Activity]
+      operationId: publishGameActivity
+      summary: 发布活动
+      description: "只允许从草稿状态发布。 校验游戏范围并记录同事务审计。"
+      x-required-permission: activity.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "activity_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Activity"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/activities/{activity_id}/disable:
+    post:
+      tags: [Activity]
+      operationId: disableGameActivity
+      summary: 停用活动
+      description: "只允许停用已发布记录，状态设为 disabled。 校验游戏范围并记录同事务审计。"
+      x-required-permission: activity.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "activity_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Activity"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/announcements/{announcement_id}:
+    put:
+      tags: [Announcement]
+      operationId: updateGameAnnouncement
+      summary: 编辑公告草稿
+      description: "仅允许编辑草稿，使发布中的规则和奖励保持稳定。要求 end_at 晚于 start_at。"
+      x-required-permission: announcement.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "announcement_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["title", "content", "start_at", "end_at"]
+              additionalProperties: false
+              properties:
+                title: {"type": "string", "minLength": 1}
+                content: {"type": "string", "minLength": 1}
+                priority: {"type": "integer"}
+                start_at: {"type": "string", "format": "date-time"}
+                end_at: {"type": "string", "format": "date-time"}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Announcement"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/announcements/{announcement_id}/publish:
+    post:
+      tags: [Announcement]
+      operationId: publishGameAnnouncement
+      summary: 发布公告
+      description: "只允许从草稿状态发布。 校验游戏范围并记录同事务审计。"
+      x-required-permission: announcement.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "announcement_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Announcement"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/announcements/{announcement_id}/disable:
+    post:
+      tags: [Announcement]
+      operationId: disableGameAnnouncement
+      summary: 停用公告
+      description: "只允许停用已发布记录。公告停用时将状态设为 archived。 校验游戏范围并记录同事务审计。"
+      x-required-permission: announcement.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "announcement_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/Announcement"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/leaderboards/{board_id}/rebuild:
+    post:
+      tags: [Ranking]
+      operationId: enqueueLeaderboardRebuild
+      summary: 创建排行榜重建任务
+      description: "从 PostgreSQL 权威数据重建排行榜读取模型。重建任务交给 Worker 执行并记录审计。"
+      x-required-permission: ranking.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "board_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '202':
+          description: 后台任务已接收
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/GmJob"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/jobs:
+    get:
+      tags: [Jobs]
+      operationId: listGmJobs
+      summary: 列出游戏的 GM 后台任务
+      description: "按游标分页查询当前游戏中由 GM 发起的批量邮件、批量奖励及排行榜重建任务。"
+      x-required-permission: job.read
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"type": "object", "required": ["items", "next_cursor"], "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/GmJob"}}, "next_cursor": {"type": ["string", "null"]}}}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/jobs/{job_id}:
+    get:
+      tags: [Jobs]
+      operationId: getGmJob
+      summary: 查询游戏的 GM 后台任务
+      description: "job_id 为后台任务 ID，按游戏与任务类型校验范围。"
+      x-required-permission: job.read
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/GmJob"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/jobs/{job_id}/cancel:
+    post:
+      tags: [Jobs]
+      operationId: cancelGmJob
+      summary: 取消游戏的 GM 后台任务
+      description: "只允许取消待领取或正在退避的任务。取消不会撤回已投递内容。 状态校验、变更和审计在同一事务内完成。"
+      x-required-permission: job.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/GmJob"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /gm/v1/games/{game_id}/jobs/{job_id}/retry:
+    post:
+      tags: [Jobs]
+      operationId: retryGmJob
+      summary: 重试游戏的 GM 后台任务
+      description: "只允许重试终态失败的任务。重置自动重试计数，保留任务 ID、进度和业务幂等键。 状态校验、变更和审计在同一事务内完成。"
+      x-required-permission: job.manage
+      parameters:
+        - $ref: '#/components/parameters/GameId'
+        - {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["reason"]
+              additionalProperties: false
+              properties:
+                reason: {"type": "string", "minLength": 3}
+                ticket_id: {"type": "string", "minLength": 1}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: {"$ref": "#/components/schemas/GmJob"}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 components:
   securitySchemes:
     AdminBearer:
@@ -1460,9 +2142,13 @@ components:
         created_at: { type: string, format: date-time }
     RewardJob:
       type: object
-      required: [job_id, job_type, status]
+      required: [job_id, job_type, status, background_job_id]
       properties:
         job_id: { type: string, format: uuid }
+        background_job_id:
+          type: string
+          format: uuid
+          description: 用于 GM 任务查询与管理的后台任务 ID。
         job_type: { type: string, enum: [mail_delivery, batch_reward, compensation] }
         status: { type: string, enum: [pending, running, succeeded, failed, cancelled] }
         target_count: { type: integer, format: int64 }
@@ -1526,3 +2212,15 @@ components:
         metrics:
           type: object
           description: 例如 dau、new_players、runs、settlements、ad_claims、retention_d1。
+    GmJob:
+      type: object
+      required: [job_id, job_type, status, retry_count, created_at]
+      properties:
+        job_id: { type: string, format: uuid }
+        job_type: { type: string, enum: [mail_delivery, batch_reward, compensation, leaderboard_rebuild] }
+        status: { type: string, enum: [pending, running, retrying, succeeded, failed, cancelled] }
+        retry_count: { type: integer, minimum: 0 }
+        target_count: { type: integer, minimum: 0 }
+        processed_count: { type: integer, minimum: 0 }
+        failed_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }

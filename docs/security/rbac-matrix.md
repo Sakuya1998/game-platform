@@ -1,6 +1,6 @@
-﻿# RBAC 权限矩阵
+# RBAC 权限矩阵
 
-- **状态：** 评审草案（2026-11-23）。第 3 节的角色与权限映射为**提案**：设计列出了七个角色及其主要职责，并给出十一个权限代码示例；其余映射为本文补充内容，写入初始数据前须确认。
+- **状态** V1 权限基线。角色映射由 ADR-0010 确认，初始授权由 T15 迁移写入并测试。
 - **相关：** [ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[认证与授权](../architecture/authentication-and-authorization.md)、[`gm-api.yaml`](../../api/openapi/gm-api.yaml)
 - **来源：** [技术设计](../game-platform-technical-design.md)第 5.2 J 和 7.2 节
 
@@ -17,7 +17,7 @@
 
 ## 2. 权限目录
 
-`schema.sql` 中预置 23 个权限代码。“设计示例”表示该代码出现在设计文档的十一个示例中；其余代码为确保每项 GM 操作均有权限代码而新增。
+`schema.sql` 中预置 25 个权限代码。“设计示例”表示该代码出现在设计文档的十一个示例中；其余代码为确保每项 GM 操作均有权限代码而新增。
 
 | 代码 | 允许的操作 | 来源 | 高风险 |
 |---|---|---|---|
@@ -38,22 +38,24 @@
 | `activity.manage` | 创建和管理活动 | 新增 | |
 | `announcement.manage` | 创建和管理公告 | 新增 | |
 | `ranking.read` | 查看排行榜 | 新增 | |
-| `ranking.manage` | 管理和重建排行榜 | 新增 | |
+| `ranking.manage` | 管理和重建排行榜 | 新增 | 是 |
+| `job.read` | 查询本游戏的 GM 后台任务 | 新增 | |
+| `job.manage` | 取消或重试本游戏的 GM 后台任务 | 新增 | 是 |
 | `analytics.read` | 查看仪表盘和分析数据 | 新增 | |
 | `admin.read` | 查看管理员和角色 | 新增 | |
 | `admin.manage` | 创建和管理管理员 | 新增 | 是 |
 | `rbac.manage` | 修改角色权限和分配关系 | 新增 | 是 |
 | `audit.read` | 查询审计日志 | 设计示例 | |
 
-## 3. 角色矩阵（提案）
+## 3. V1 角色矩阵
 
 | 权限 | 超级管理员 | 游戏管理员 | 运营人员 | 配置管理员 | 客服 | 分析员 | 审计员 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | `game.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `game.manage` | ✓ | ✓ | | | | | |
 | `player.read` | ✓ | ✓ | ✓ | | ✓ | | |
-| `player.ban` | ✓ | ✓ | | | ✓ | | |
-| `player.unban` | ✓ | ✓ | | | ✓ | | |
+| `player.ban` | ✓ | ✓ | | | | | |
+| `player.unban` | ✓ | ✓ | | | | | |
 | `player.save.restore` | ✓ | ✓ | | | | | |
 | `economy.read` | ✓ | ✓ | | | ✓ | | |
 | `economy.grant` | ✓ | ✓ | | | | | |
@@ -67,6 +69,8 @@
 | `announcement.manage` | ✓ | ✓ | ✓ | | | | |
 | `ranking.read` | ✓ | ✓ | ✓ | | | ✓ | |
 | `ranking.manage` | ✓ | ✓ | | | | | |
+| `job.read` | ✓ | ✓ | ✓ | | | | |
+| `job.manage` | ✓ | ✓ | | | | | |
 | `analytics.read` | ✓ | ✓ | | | | ✓ | |
 | `admin.read` | ✓ | | | | | | |
 | `admin.manage` | ✓ | | | | | | |
@@ -75,26 +79,15 @@
 
 | 角色 | `admin.roles` 中的代码 | 常规范围 | 权限数 |
 |---|---|---|---:|
-| 超级管理员 | `super_admin` | 平台 | 23 |
-| 游戏管理员 | `game_admin` | 游戏 | 20 |
-| 运营人员 | `operator` | 游戏 | 7 |
+| 超级管理员 | `super_admin` | 平台 | 25 |
+| 游戏管理员 | `game_admin` | 游戏 | 22 |
+| 运营人员 | `operator` | 游戏 | 8 |
 | 配置管理员 | `config_manager` | 游戏 | 4 |
-| 客服 | `customer_support` | 游戏 | 5 |
+| 客服 | `customer_support` | 游戏 | 3 |
 | 分析员 | `analyst` | 游戏 | 3 |
 | 审计员 | `auditor` | 游戏或平台 | 2 |
 
-### 尚待决策的权限分配
-
-| 本文的选择 | 备选方案 | 影响 |
-|---|---|---|
-| 客服可以封禁和解封 | 客服只读；由游戏管理员封禁 | 设计仅称客服负责“玩家查询和支持操作”，未具体列出权限 |
-| 客服不能恢复存档 | 允许客服恢复 | 恢复存档是常见客服请求，但也会覆盖当前存档 |
-| 客服不能调账 | — | 设计明确规定客服默认不得拥有调账权限 |
-| 运营人员同时拥有 `mail.create` 和 `mail.send` | 由两人分别负责创建和发送 | 带附件的邮件可以向所有玩家发放资产 |
-| 配置管理员同时拥有 `config.edit` 和 `config.publish` | 将编辑和发布分开 | 设计赋予该角色“编辑和发布”职责；拆分会增加评审步骤 |
-| 游戏管理员拥有 `economy.grant` 和 `economy.deduct` | 增设独立经济角色 | 保持与设计一致，仅设置七个角色 |
-| 运营人员没有 `analytics.read` | 授予该权限 | 运营人员可能需要查看活动效果 |
-| 游戏管理员没有 `admin.read` | 允许其查看本游戏的其他管理员 | 需要按游戏范围过滤管理员列表 |
+运营人员可查询已授权游戏的任务进度。任务读取只返回状态与计数，不返回任务载荷。客服仅保留已授权游戏的读取权限。封禁、解封和资产变更由具有相应权限的游戏管理员执行。
 
 ## 4. 范围规则
 
@@ -134,8 +127,12 @@
 | `PUT /roles/{role_id}/permissions` | `rbac.manage` |
 | `GET /audit-logs` | `audit.read` |
 | `GET /analytics/overview` | `analytics.read` |
-
-契约中尚无使用 `ranking.manage` 的操作；该权限预留给排行榜创建和重建。
+| `POST .../players/{player_id}/item-adjustments` | 正数为 `economy.grant`，负数为 `economy.deduct` |
+| `POST .../reward-jobs` | `economy.grant` |
+| 活动与公告查询、编辑、发布和停用 | `activity.manage` 或 `announcement.manage` |
+| 排行榜创建和重建 | `ranking.manage` |
+| 任务查询 | `job.read` |
+| 任务取消与重试 | `job.manage` |
 
 ## 6. 模型自身的防护措施
 
@@ -153,7 +150,7 @@
 | 每种角色在其所属游戏中调用每项操作 | 仅在矩阵标记允许的位置通过 |
 | 任一角色调用其未获授权游戏中的操作 | 返回 `403` |
 | 仅获游戏范围授权的游戏管理员调用 `POST /games` | 返回 `403` |
-| 客服调用 `wallet-adjustments` | 返回 `403` |
+| 客服调用 `wallet-adjustments`、封禁或解封 | 返回 `403` |
 | 仅有 `economy.grant` 权限的用户提交负数 | 返回 `403` |
 | 角色被撤销某项权限 | 权限缓存 TTL 过后，下一个请求被拒绝 |
 | 未声明所需权限的操作 | 不得挂载路由 |

@@ -1,4 +1,4 @@
-﻿# Schema 设计说明
+# Schema 设计说明
 
 - **状态：** 评审草案（2026-11-23）
 - **细化：** [ADR-0006](../adr/ADR-0006-postgresql-schema-design.md)
@@ -154,7 +154,7 @@ config_releases（不可变的发布事件，按 release_no 排序）
 | `operation.player_mail` | 群发邮件 × 玩家数 | 保留期后删除过期及已领取邮件 |
 | `system.background_jobs`、`outbox_events`、`idempotency_keys` | 系统操作 | 定时清理任务 |
 
-根据实际测得的数据量决定分区和保留策略，而非提前设定（ADR-0006）。保留期限仍是[决策文档](../architecture/decisions.md)中的待决事项。
+根据实际测得的数据量决定分区和保留策略，而非提前设定（ADR-0006）。临时保留基线为原始事件 90 天、登录记录 180 天、审计 2 年、资产流水 7 年。生产前确认最终期限及删除规则。详见 [ADR-0010](../adr/ADR-0010-v1-decision-baseline.md)。
 
 ## 6. Schema 变更
 

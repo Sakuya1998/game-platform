@@ -7,6 +7,8 @@
 > 技术栈：Go + Gin + PostgreSQL + Redis + Vue 3 + Cocos Creator  
 > 配套规范：[`adr/`](adr/)、[`architecture/decisions.md`](architecture/decisions.md)、[`database/schema.sql`](database/schema.sql)、[`database/erd.md`](database/erd.md)、[`../api/openapi/`](../api/openapi/)、[`implementation/roadmap.md`](implementation/roadmap.md)
 
+2026-11-24 确认的 V1 实施决策、发布门禁与新增端点见 [ADR-0010](adr/ADR-0010-v1-decision-baseline.md) 和[实施路线图](implementation/roadmap.md)。
+
 本版将之前的架构决策统一整理，重点修正三个地方：
 
 1. 玩家 API、GM API 从第一版开始独立部署，但共享同一套 Game Core，不拆成微服务。
@@ -329,7 +331,7 @@ Token 建议：
 | Access Token | 1 小时 |
 | Refresh Token | 30 天 |
 | GM Access Token | 15–30 分钟 |
-| GM Refresh Token | 由安全策略决定，支持撤销 |
+| GM Refresh Token | 自首次签发起最长 7 天，轮换不延长该上限，支持撤销 |
 | Service Credential | 独立 AK/SK 或 mTLS |
 
 具体有效期可以在安全评审后调整。
@@ -839,7 +841,7 @@ erDiagram
 2. 重要业务表使用 `(game_id, id)` 组合唯一约束。
 3. 跨表引用使用包含 `game_id` 的组合外键。
 4. Repository 查询必须显式带 `game_id`。
-5. 对高风险数据考虑 PostgreSQL RLS 作为纵深防御。
+5. V1 推迟 RLS，验证独立运行时角色、复合约束和跨游戏访问控制。
 6. `game-api`、`gm-api`、`game-worker` 使用不同数据库运行角色。
 7. Migration 使用单独的数据库角色。
 8. 不给任何业务运行角色超级用户权限。
@@ -1072,7 +1074,7 @@ INTERNAL_ERROR
 | Game Admin | 指定游戏管理 |
 | Operator | 邮件、公告、活动 |
 | Config Manager | 配置编辑和发布 |
-| Customer Support | 玩家查询和客服操作 |
+| Customer Support | 获授权游戏的只读客服查询 |
 | Analyst | 数据查看 |
 | Auditor | 审计查看 |
 
@@ -1084,7 +1086,7 @@ INTERNAL_ERROR
 - 高风险操作审批。
 - 操作审计。
 
-例如客服可以查看玩家资料，但不应默认具有钱包调账权限。
+客服仅有读取权限，封禁、解封和资产变更由持有相应权限的游戏管理员执行。
 
 ### 7.3 高风险操作
 
@@ -1763,7 +1765,7 @@ docs/
 - [ ] 钱包余额与流水事务一致。
 - [ ] 并发扣款、重复结算和重复领取测试通过。
 - [ ] 存档乐观锁冲突测试通过。
-- [ ] RLS / GRANT 使用真实 runtime LOGIN role 验证。
+- [ ] 使用真实运行时登录角色验证授权、跨游戏隔离和受控资产写入。
 
 **运营与可靠性**
 

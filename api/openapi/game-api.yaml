@@ -776,6 +776,21 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/mails/{mail_id}/read:
+    put:
+      tags: [Mail]
+      operationId: markPlayerMailRead
+      summary: 将当前玩家的邮件标为已读
+      description: "mail_id 是玩家邮件条目 ID。仅更新当前玩家和游戏所属的邮件。首次标记时写入 read_at，重复请求保留该时间，不领取附件。"
+      parameters:
+        - {"name": "mail_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 components:
   securitySchemes:
     PlayerBearer:

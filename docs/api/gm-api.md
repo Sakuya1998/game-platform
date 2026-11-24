@@ -1,4 +1,4 @@
-﻿# GM API 指南
+# GM API 指南
 
 - **状态：** 评审草案（2026-11-23）
 - **契约：** [`api/openapi/gm-api.yaml`](../../api/openapi/gm-api.yaml) 是事实来源。本指南解释 YAML 无法表达的行为；若两者不一致，应修正本指南。
@@ -25,9 +25,9 @@ GM 安全平面与玩家安全平面相互隔离。玩家令牌在此处会被�
 2. 使用 challenge token 和验证码调用 `POST /auth/mfa/verify`，返回 access token 和 refresh token。
 3. 调用 `POST /auth/refresh` 轮换 refresh token。
 
-契约目前没有登出端点或 MFA 注册端点。可用的管理后台需要这两项能力，属于 T15 的待决事项。
+首次登录需要注册 MFA 的管理员先用登录挑战请求 `POST /auth/mfa/enrollment`，再用注册令牌及验证码请求 `POST /auth/mfa/enrollment/confirm`。确认后才签发会话。调用 `POST /auth/logout` 撤销当前会话。刷新会话最长 7 天，轮换不延长此上限。
 
-## 3. 所有变更操作的通用规则
+## 3. 业务变更操作的通用规则
 
 | 规则 | 说明 |
 |---|---|
@@ -73,7 +73,7 @@ GM 安全平面与玩家安全平面相互隔离。玩家令牌在此处会被�
 
 调账传入变更量（`amount`），绝不传入目标余额。流水和审计记录（含变更前后余额）需一并提交。若扣款会导致余额为负，返回 `409 INSUFFICIENT_BALANCE`。
 
-目前没有调整道具或发起非邮件批量奖励的端点。设计中的 GM 菜单列出了这两项，属于 T11 和 T13 的待决事项。
+`POST .../players/{player_id}/item-adjustments` 使用 `item_id` 和带符号的 `amount`，按方向检查发放或扣除权限。`POST /games/{game_id}/reward-jobs` 需要 `economy.grant`，返回 `202` 和后台任务 ID。两项操作均须二次确认，提供原因并记录同事务审计。
 
 ### 配置
 
@@ -102,7 +102,7 @@ GM 安全平面与玩家安全平面相互隔离。玩家令牌在此处会被�
 
 `send` 会创建奖励任务和后台任务，并返回 `202`。邮件投递由 `game-worker` 执行，并对每位玩家保证幂等。
 
-契约目前只覆盖创建。设计中的 GM 菜单还包括列出、编辑、发布和停用活动及公告，列出邮件并查看任务进度，以及创建和重建排行榜；API 表格未列出这些操作，属于 T13、T14 和 T16 的待决事项。
+活动和公告支持分页列表、草稿编辑、发布及停用。创建与重建排行榜需要 `ranking.manage`，重建返回 `202`。通过 `/games/{game_id}/jobs` 分页查询 GM 发起的任务，使用 `background_job_id` 读取单个任务。取消和重试使用 `/jobs/{job_id}/cancel` 与 `/jobs/{job_id}/retry`，需要 `job.manage`、原因和二次确认。取消仅接受 `pending` 或 `retrying`，重试仅接受 `failed`，并保留已完成步骤的幂等键。
 
 ### 管理员、角色、审计与分析
 

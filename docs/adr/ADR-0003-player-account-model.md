@@ -1,4 +1,4 @@
-﻿# ADR-0003 — 玩家账号模型
+# ADR-0003 — 玩家账号模型
 
 - **状态：** 已接受
 - **日期：** 2026-11-23
@@ -26,9 +26,9 @@
 
 **凭据处理。**
 
-- AppSecret 仅保存在服务端密钥库中，数据库只存储其引用。
+- AppSecret 仅保存在服务端密钥库中，数据库只存储其引用。平台负责人管理授权，每 90 天轮换一次，发生泄露或相关人员变更时立即轮换。
 - 不得向客户端返回微信 `session_key`。
-- Refresh token 以哈希形式存储，使用时轮换，并可撤销。支持登出、撤销和封禁。
+- Refresh token 以哈希形式存储，使用时轮换，并可撤销。支持登出、撤销和封禁，并按 [ADR-0010](ADR-0010-v1-decision-baseline.md) 启用重用检测和会话拒绝名单。
 - 登录接口应限流。失败的微信登录记录在 `auth.login_records`，保留可诊断错误码，但不记录 code、`session_key` 或令牌。
 
 **初始令牌有效期**（可在安全评审后调整）：
@@ -38,7 +38,7 @@
 | 玩家 access token | 1 小时 |
 | 玩家 refresh token | 30 天 |
 | GM access token | 15–30 分钟 |
-| GM refresh token | 由安全策略确定，可撤销 |
+| GM refresh token | 最长 7 天（从首次签发起），可撤销 |
 | 服务凭据 | 独立 AK/SK 或 mTLS |
 
 **平台适配器。** 各平台的登录逻辑位于 `internal/platform/<provider>` 下的适配器中。`gamecore` 使用规范化身份记录，不依赖微信数据结构。

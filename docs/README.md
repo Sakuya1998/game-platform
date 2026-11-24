@@ -1,13 +1,13 @@
-﻿# 架构文档
+# 架构文档
 
-基线版本：v2.0（2026-11-23）。
+基线版本 v2.0（2026-11-23），实施决策于 2026-11-24 补充。
 
 ## 概览
 
 | 文档 | 内容 |
 |---|---|
 | [游戏平台技术设计与实施方案](game-platform-technical-design.md) | 端到端设计：架构、模块、数据库、API、GM 平台、Worker、部署与路线图 |
-| [架构概览与 ADR 索引](architecture/decisions.md) | 组件职责、相较 v1.0 基线的变化、待决问题 |
+| [架构概览与 ADR 索引](architecture/decisions.md) | 组件职责、相较 v1.0 基线的变化、V1 决策与发布门禁 |
 | [实施路线图](implementation/roadmap.md) | P0–P8 阶段、阶段门禁、Codex 任务 T00–T22、V1 范围 |
 
 ## 已接受的决策
@@ -23,6 +23,7 @@
 | [ADR-0007](adr/ADR-0007-economy-transaction-model.md) | 余额与流水、幂等性及 GM 调账 |
 | [ADR-0008](adr/ADR-0008-internal-api-and-worker.md) | Worker 直接调用 `gamecore`；内部 API 预留 |
 | [ADR-0009](adr/ADR-0009-async-job-model.md) | 基于 PostgreSQL 的任务与 Outbox |
+| [ADR-0010](adr/ADR-0010-v1-decision-baseline.md) | 2026-11-24 确认的 V1 实施决策与发布门禁 |
 
 ## 主题文档（评审草案）
 
@@ -81,7 +82,7 @@
 
 ## 文档维护
 
-`api/openapi/player-api.yaml` 已由 `game-api.yaml` 取代。该文件仅含注释，应通过 `git rm api/openapi/player-api.yaml` 删除。
+玩家端契约使用 `api/openapi/game-api.yaml`。
 
 仓库布局中提及的 `docs/runbooks/` 目录目前不存在；备份与恢复手册属于 T20 交付项。
 
@@ -89,6 +90,6 @@
 
 这些文档定义的是设计基线，而非已实现的系统。本仓库没有应用代码。DDL 尚未在 PostgreSQL 中执行，OpenAPI 文档尚未通过 lint，Mermaid 图也尚未渲染。
 
-标记为 **已接受** 的决策构成基线。变更服务边界、身份隔离、数据权威或授权机制，必须修订相应 ADR，并在实施前完成评审。主题文档在评审通过前均为草案；其中的 **（提案）** 项列在[决策文档](architecture/decisions.md)的待决问题中。
+标记为 **已接受** 的决策构成基线。变更服务边界、身份隔离、数据权威或授权机制，必须修订相应 ADR，并在实施前完成评审。主题文档中的 **（提案）** 在对应实施阶段评审。已确认的 V1 决策及发布门禁见 [ADR-0010](adr/ADR-0010-v1-decision-baseline.md)。
 
 DDL 与 OpenAPI 均为版本化交付物。Schema 变更应通过只向前的迁移实施；不得原地修改已应用的迁移。

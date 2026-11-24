@@ -1,4 +1,4 @@
-﻿# ADR-0006 — PostgreSQL Schema 设计
+# ADR-0006 — PostgreSQL Schema 设计
 
 - **状态：** 已接受
 - **日期：** 2026-11-23
@@ -30,8 +30,8 @@
 
 - `game-api`、`gm-api`、`game-worker` 分别使用独立运行时角色；迁移使用单独角色。运行时角色不得为超级用户或表所有者。
 - V1 通过区分角色、最小权限授权和受控 Repository 实现隔离。
-- 对高价值资产写入，在向任何 API 进程授予广泛表写权限前，应评估受控 SQL 函数、`SECURITY DEFINER` 或专用写入路径。
-- 可对高风险数据启用 RLS 作为纵深防御，并使用真实登录角色进行测试。
+- 生产前使用受控数据库函数写入钱包和道具，运行时角色不得直接变更资产表。
+- V1 推迟 RLS，由复合外键、应用范围校验、角色授权及隔离测试落实隔离。详见 [ADR-0010](ADR-0010-v1-decision-baseline.md)。
 
 **迁移。** Schema 变更采用有序、只向前的迁移（golang-migrate 或 Atlas），存放于 `/migrations`。已应用的迁移不得修改。`docs/database/schema.sql` 是经过评审的基线，T03 将据此生成首批迁移。
 

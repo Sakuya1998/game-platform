@@ -1,4 +1,4 @@
-﻿# 系统架构
+# 系统架构
 
 - **状态：** 评审草案（2026-11-23）
 - **细化：** [ADR-0001](../adr/ADR-0001-modular-monolith.md)、[ADR-0005](../adr/ADR-0005-api-service-boundaries.md)、[ADR-0008](../adr/ADR-0008-internal-api-and-worker.md)
@@ -37,7 +37,7 @@ flowchart TB
 | `gm-api` | Go + Gin 进程 | 面向运营人员的 HTTP API | 部署 |
 | `game-worker` | Go 进程，无入站流量 | Outbox 与后台任务 | 部署 |
 | `internal-api` | Go + Gin 进程 | 服务间 HTTP API | 预留，不部署 |
-| 平台回调入口 | 路由组 | 接收微信和广告平台的入站调用 | 承载位置待定，详见[服务边界](service-boundaries.md#5-third-party-callbacks) |
+| 平台回调入口 | 路由组 | 接收微信和广告平台的入站调用 | 如需实现，由 `game-api` 独立路由组承载。详见[服务边界](service-boundaries.md#5-第三方回调) |
 | `gamecore` | Go 包 | 业务规则的唯一实现 | 进程内库 |
 | `gm-web` | Vue 3 静态应用 | 运营控制台 | 部署 |
 | `game-client` | Cocos Creator 应用 | 游戏客户端 | 按游戏提供 |
